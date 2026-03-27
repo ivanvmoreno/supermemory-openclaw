@@ -54,30 +54,6 @@ jobs:
       - name: Run Biome lint
         run: biome lint .
 
-  publish-clawhub:
-    name: Publish to ClawHub
-    needs: validate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Install ClawHub CLI
-        run: npm install -g clawhub@latest
-
-      - name: Authenticate with ClawHub
-        run: clawhub login --token "${{ secrets.CLAWHUB_TOKEN }}"
-
-      - name: Publish plugin
-        run: |
-          set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
-          echo "Publishing version ${VERSION} to ClawHub..."
-          clawhub publish . --version "$VERSION" --slug openclaw-memory-supermemory
-
   publish-npm:
     name: Publish to npm (Trusted Publishing)
     needs: validate
@@ -115,7 +91,7 @@ jobs:
 
   github-release:
     name: Create GitHub Release
-    needs: [publish-clawhub, publish-npm]
+    needs: publish-npm
     runs-on: ubuntu-latest
     permissions:
       contents: write
