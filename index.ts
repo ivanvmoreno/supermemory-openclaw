@@ -259,6 +259,7 @@ export default {
         registerSupermemoryCli(program, db, embeddings, cfg)
       },
       {
+        commands: ["supermemory"],
         descriptors: [
           {
             name: "supermemory",
