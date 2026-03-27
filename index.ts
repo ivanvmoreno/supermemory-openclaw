@@ -86,7 +86,7 @@ export default {
     // Memory flush plan — capture durable memories before compaction
     // ====================================================================
 
-    api.registerMemoryFlushPlan((params) => {
+    if (typeof api.registerMemoryFlushPlan === "function") api.registerMemoryFlushPlan((params) => {
       const flushCfg = (params.cfg as Record<string, any>)?.agents?.defaults?.compaction?.memoryFlush
       if (flushCfg?.enabled === false) return null
 
@@ -118,7 +118,7 @@ export default {
     // Memory runtime — MemoryPluginRuntime for core integration
     // ====================================================================
 
-    api.registerMemoryRuntime({
+    if (typeof api.registerMemoryRuntime === "function") api.registerMemoryRuntime({
       async getMemorySearchManager() {
         try {
           const { hybridSearch } = await import("./src/search.ts")
