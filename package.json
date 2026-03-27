@@ -1,6 +1,6 @@
 {
   "name": "openclaw-memory-supermemory",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Local graph-based memory plugin for OpenClaw with entity extraction, user profiles, and automatic forgetting — inspired by Supermemory",
   "license": "MIT",
@@ -24,6 +24,11 @@
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.26"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
