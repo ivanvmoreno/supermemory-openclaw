@@ -1,0 +1,43 @@
+{
+  "name": "openclaw-memory-supermemory",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Local graph-based memory plugin for OpenClaw with entity extraction, user profiles, and automatic forgetting — inspired by Supermemory",
+  "license": "MIT",
+  "author": "",
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "memory",
+    "graph-memory",
+    "supermemory",
+    "entity-extraction",
+    "knowledge-graph",
+    "local-ai"
+  ],
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.26"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit",
+    "lint": "bunx @biomejs/biome ci .",
+    "lint:fix": "bunx @biomejs/biome check --write .",
+    "test": "echo 'no tests yet'",
+    "ci": "bun run check-types && bun run lint"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

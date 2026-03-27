@@ -1,0 +1,72 @@
+###############################################################################
+# ONE-TIME Bootstrap: First npm publish
+#
+# npm Trusted Publishing requires the package to exist before you can configure
+# it. This workflow publishes the initial version using a classic NPM_TOKEN,
+# after which you can enable Trusted Publishing on npmjs.com and all subsequent
+# releases go through release.yml (OIDC, no token needed).
+#
+# How to use:
+#   1. Create a classic npm token (Automation type) at https://www.npmjs.com/settings/~/tokens
+#   2. Add it as a repository secret: Settings → Secrets → NPM_TOKEN
+#   3. Run this workflow manually from Actions → "Bootstrap: First npm publish" → Run workflow
+#   4. After it succeeds, go to npmjs.com → package settings → Trusted Publishers
+#      → Add GitHub Actions → set owner, repo, workflow: release.yml
+#   5. Delete the NPM_TOKEN secret — it's no longer needed
+#   6. Disable or delete this workflow — it's no longer needed
+###############################################################################
+
+name: "Bootstrap: First npm publish"
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g. 0.1.0)"
+        required: true
+        default: "0.1.0"
+      dry-run:
+        description: "Dry run (don't actually publish)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap-publish:
+    name: Publish initial version to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Set version
+        run: npm version "${{ inputs.version }}" --no-git-tag-version --allow-same-version
+
+      - name: Publish to npm
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.dry-run }}" = "true" ]; then
+            echo "DRY RUN — would publish:"
+            npm publish --access public --dry-run
+          else
+            npm publish --access public
+            echo ""
+            echo "========================================="
+            echo "  Published openclaw-memory-supermemory@${{ inputs.version }}"
+            echo "========================================="
+            echo ""
+            echo "NEXT STEPS:"
+            echo "  1. Go to https://www.npmjs.com/package/openclaw-memory-supermemory/access"
+            echo "  2. Scroll to 'Trusted Publishers' → click 'GitHub Actions'"
+            echo "  3. Set repository owner, name, and workflow: release.yml"
+            echo "  4. Delete the NPM_TOKEN repository secret"
+            echo "  5. Disable this workflow (it's no longer needed)"
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

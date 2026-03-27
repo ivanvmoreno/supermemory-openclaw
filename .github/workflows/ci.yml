@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate-plugin:
+    name: Validate plugin package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required files exist
+        run: |
+          set -euo pipefail
+          for f in index.ts openclaw.plugin.json package.json README.md; do
+            if [ ! -f "$f" ]; then
+              echo "ERROR: Missing required file: $f"
+              exit 1
+            fi
+          done
+          echo "All required files present."
+
+      - name: Validate plugin manifest
+        run: |
+          set -euo pipefail
+          if ! grep -q '"kind": "memory"' openclaw.plugin.json; then
+            echo "ERROR: openclaw.plugin.json must have kind: memory"
+            exit 1
+          fi
+          if ! grep -q '"id":' openclaw.plugin.json; then
+            echo "ERROR: openclaw.plugin.json must have an id"
+            exit 1
+          fi
+          echo "Plugin manifest is valid."
+
+      - name: Validate plugin entry is declared
+        run: |
+          set -euo pipefail
+          if ! grep -q '"extensions"' package.json; then
+            echo "ERROR: package.json must declare openclaw.extensions"
+            exit 1
+          fi
+          echo "Plugin entry declared in package.json."
+
+      - name: Check no forbidden files are present
+        run: |
+          set -euo pipefail
+          FORBIDDEN=(.env .env.local)
+          for f in "${FORBIDDEN[@]}"; do
+            if [ -f "$f" ]; then
+              echo "ERROR: $f should not be included in the plugin package"
+              exit 1
+            fi
+          done
+          echo "No forbidden files found."
+
+  quality-checks:
+    name: Type Check, Format & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Setup Biome
+        uses: biomejs/setup-biome@v2
+        with:
+          version: 2.3.8
+
+      - name: Run TypeScript type checking
+        run: bun run check-types
+
+      - name: Run Biome CI (format & lint)
+        run: biome ci .

@@ -1,0 +1,139 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate plugin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required files exist
+        run: |
+          set -euo pipefail
+          for f in index.ts openclaw.plugin.json package.json README.md; do
+            if [ ! -f "$f" ]; then
+              echo "ERROR: Missing required file: $f"
+              exit 1
+            fi
+          done
+          echo "All required files present."
+
+      - name: Validate plugin manifest
+        run: |
+          set -euo pipefail
+          if ! grep -q '"kind": "memory"' openclaw.plugin.json; then
+            echo "ERROR: openclaw.plugin.json must have kind: memory"
+            exit 1
+          fi
+          echo "Plugin manifest is valid."
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Setup Biome
+        uses: biomejs/setup-biome@v2
+        with:
+          version: 2.3.8
+
+      - name: Run TypeScript type checking
+        run: bun run check-types
+
+      - name: Run Biome CI (format & lint)
+        run: biome ci .
+
+  publish-clawhub:
+    name: Publish to ClawHub
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install ClawHub CLI
+        run: npm install -g clawhub@latest
+
+      - name: Authenticate with ClawHub
+        run: clawhub login --token "${{ secrets.CLAWHUB_TOKEN }}"
+
+      - name: Publish plugin
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Publishing version ${VERSION} to ClawHub..."
+          clawhub publish . --version "$VERSION" --slug openclaw-memory-supermemory
+
+  publish-npm:
+    name: Publish to npm (Trusted Publishing)
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # npm recommends Node >=22.14.0 and npm >=11.5.1 for trusted publishing
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Verify npm version supports trusted publishing
+        run: |
+          echo "node $(node -v)"
+          echo "npm $(npm -v)"
+
+      - name: Set version from tag
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Publish to npm
+        # Uses OIDC trusted publishing — no NPM_TOKEN secret needed.
+        # The npm CLI detects the OIDC environment and authenticates automatically.
+        #
+        # PREREQUISITE: Trusted publisher must be configured on npmjs.com first.
+        # See .github/workflows/bootstrap-npm.yml for initial setup instructions.
+        run: npm publish --provenance --access public
+
+  github-release:
+    name: Create GitHub Release
+    needs: [publish-clawhub, publish-npm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build release archive
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          ARCHIVE="openclaw-memory-supermemory-${VERSION}.zip"
+          zip -r "$ARCHIVE" index.ts openclaw.plugin.json package.json README.md biome.json tsconfig.json src/
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "v${{ env.VERSION }}"
+          generate_release_notes: true
+          files: ${{ env.ARCHIVE }}

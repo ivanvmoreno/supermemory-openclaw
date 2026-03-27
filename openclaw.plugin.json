@@ -1,0 +1,86 @@
+{
+  "id": "openclaw-memory-supermemory",
+  "kind": "memory",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "embedding": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider": { "type": "string" },
+          "model": { "type": "string" },
+          "apiKey": { "type": "string" },
+          "baseUrl": { "type": "string" },
+          "dimensions": { "type": "number" }
+        }
+      },
+      "autoCapture": { "type": "boolean" },
+      "autoRecall": { "type": "boolean" },
+      "profileFrequency": { "type": "number", "minimum": 1, "maximum": 1000 },
+      "entityExtraction": { "type": "string", "enum": ["pattern", "llm"] },
+      "forgetExpiredIntervalMinutes": { "type": "number", "minimum": 1 },
+      "temporalDecayDays": { "type": "number", "minimum": 1 },
+      "maxRecallResults": { "type": "number", "minimum": 1, "maximum": 100 },
+      "vectorWeight": { "type": "number", "minimum": 0, "maximum": 1 },
+      "textWeight": { "type": "number", "minimum": 0, "maximum": 1 },
+      "graphWeight": { "type": "number", "minimum": 0, "maximum": 1 },
+      "dbPath": { "type": "string" },
+      "captureMaxChars": { "type": "number", "minimum": 100, "maximum": 10000 },
+      "debug": { "type": "boolean" }
+    }
+  },
+  "uiHints": {
+    "embedding.provider": {
+      "label": "Embedding Provider",
+      "placeholder": "ollama",
+      "help": "Embedding provider: ollama, openai, gemini, etc."
+    },
+    "embedding.model": {
+      "label": "Embedding Model",
+      "placeholder": "nomic-embed-text",
+      "help": "Embedding model name"
+    },
+    "embedding.apiKey": {
+      "label": "API Key",
+      "sensitive": true,
+      "placeholder": "sk-...",
+      "help": "API key (only for cloud embedding providers)"
+    },
+    "embedding.baseUrl": {
+      "label": "Base URL",
+      "placeholder": "http://localhost:11434/v1",
+      "help": "Custom base URL for embedding provider",
+      "advanced": true
+    },
+    "embedding.dimensions": {
+      "label": "Dimensions",
+      "help": "Vector dimensions (auto-detected for known models)",
+      "advanced": true
+    },
+    "autoCapture": {
+      "label": "Auto-Capture",
+      "help": "Automatically extract and store memories from conversations"
+    },
+    "autoRecall": {
+      "label": "Auto-Recall",
+      "help": "Automatically inject relevant memories and user profile into context"
+    },
+    "entityExtraction": {
+      "label": "Entity Extraction Mode",
+      "help": "\"pattern\" (fast, local regex) or \"llm\" (higher quality, uses configured LLM)",
+      "advanced": true
+    },
+    "dbPath": {
+      "label": "Database Path",
+      "placeholder": "~/.openclaw/memory/supermemory.db",
+      "advanced": true
+    },
+    "debug": {
+      "label": "Debug Mode",
+      "help": "Enable verbose logging",
+      "advanced": true
+    }
+  }
+}
