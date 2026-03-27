@@ -395,7 +395,7 @@ export class MemoryDB {
       .get(name, type) as Record<string, unknown> | undefined;
 
     if (existing) {
-      this.db.prepare(`UPDATE entities SET last_seen = ? WHERE id = ?`).run(now, existing.id);
+      this.db.prepare(`UPDATE entities SET last_seen = ? WHERE id = ?`).run(now, existing.id as string);
       return {
         id: existing.id as string,
         name: existing.name as string,
