@@ -25,6 +25,10 @@ on:
         description: "Version to publish (e.g. 0.1.0)"
         required: true
         default: "0.1.0"
+      otp:
+        description: "npm OTP code (required if your account has 2FA enabled)"
+        required: false
+        default: ""
       dry-run:
         description: "Dry run (don't actually publish)"
         type: boolean
@@ -51,11 +55,15 @@ jobs:
       - name: Publish to npm
         run: |
           set -euo pipefail
+          OTP_FLAG=""
+          if [ -n "${{ inputs.otp }}" ]; then
+            OTP_FLAG="--otp=${{ inputs.otp }}"
+          fi
           if [ "${{ inputs.dry-run }}" = "true" ]; then
             echo "DRY RUN — would publish:"
-            npm publish --access public --dry-run
+            npm publish --access public --dry-run $OTP_FLAG
           else
-            npm publish --access public
+            npm publish --access public $OTP_FLAG
             echo ""
             echo "========================================="
             echo "  Published openclaw-memory-supermemory@${{ inputs.version }}"
