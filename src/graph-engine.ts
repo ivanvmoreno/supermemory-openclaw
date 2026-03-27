@@ -84,8 +84,7 @@ export function extractEntities(text: string): ExtractedEntity[] {
   // People
   for (const pattern of PERSON_PATTERNS) {
     const regex = new RegExp(pattern.source, pattern.flags);
-    let match: RegExpExecArray | null;
-    while ((match = regex.exec(text)) !== null) {
+    for (const match of text.matchAll(regex)) {
       const name = match[1]?.trim();
       if (name && name.length > 1 && name.length < 50) {
         add(name, "person");
@@ -111,8 +110,7 @@ export function extractEntities(text: string): ExtractedEntity[] {
   // Projects
   for (const pattern of PROJECT_PATTERNS) {
     const regex = new RegExp(pattern.source, pattern.flags);
-    let match: RegExpExecArray | null;
-    while ((match = regex.exec(text)) !== null) {
+    for (const match of text.matchAll(regex)) {
       const name = match[1]?.trim();
       if (name && name.length > 1 && name.length < 50) {
         add(name, "project");
@@ -123,8 +121,7 @@ export function extractEntities(text: string): ExtractedEntity[] {
   // Technologies
   for (const pattern of TECH_PATTERNS) {
     const regex = new RegExp(pattern.source, pattern.flags);
-    let match: RegExpExecArray | null;
-    while ((match = regex.exec(text)) !== null) {
+    for (const match of text.matchAll(regex)) {
       add(match[1], "technology");
     }
   }
@@ -210,7 +207,7 @@ const EXTENSION_INDICATORS = [
 export async function detectRelationships(
   newMemory: MemoryRow,
   db: MemoryDB,
-  embeddings: EmbeddingProvider,
+  _embeddings: EmbeddingProvider,
 ): Promise<DetectedRelationship[]> {
   const relationships: DetectedRelationship[] = [];
 

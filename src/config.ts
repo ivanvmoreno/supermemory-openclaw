@@ -81,13 +81,6 @@ function resolveEnvVars(value: string): string {
   });
 }
 
-function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], label: string) {
-  const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
-  if (unknown.length > 0) {
-    throw new Error(`${label} has unknown keys: ${unknown.join(", ")}`);
-  }
-}
-
 function clampNumber(value: unknown, fallback: number, min?: number, max?: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   let v = value;

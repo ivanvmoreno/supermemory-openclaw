@@ -21,7 +21,7 @@ export function registerSupermemoryCli(
     .option("--limit <n>", "Max results", "10")
     .action(async (query: unknown, opts: unknown) => {
       const q = query as string;
-      const limit = parseInt((opts as Record<string, string>).limit ?? "10");
+      const limit = Number.parseInt((opts as Record<string, string>).limit ?? "10", 10);
       const results = await hybridSearch(q, db, embeddings, cfg, { maxResults: limit });
       if (results.length === 0) {
         console.log("No memories found.");

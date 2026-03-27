@@ -280,7 +280,7 @@ export default {
       start: () => {
         forgettingService.start()
         api.logger.info(
-          `memory-supermemory: service started ` +
+          "memory-supermemory: service started " +
             `(autoRecall: ${cfg.autoRecall}, autoCapture: ${cfg.autoCapture}, ` +
             `forgetting: every ${cfg.forgetExpiredIntervalMinutes}min)`,
         )

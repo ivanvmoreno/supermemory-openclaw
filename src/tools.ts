@@ -293,7 +293,7 @@ export function createMemoryProfileTool(ctx: ToolContext): ToolDefinition {
           {
             type: "text",
             text:
-              `**User Profile**\n\n` +
+              "**User Profile**\n\n" +
               `**Static (long-term):**\n${staticText}\n\n` +
               `**Dynamic (recent):**\n${dynamicText}\n\n` +
               `**Stats:** ${stats.activeMemories} active memories, ${stats.entities} entities, ${stats.relationships} relationships`,

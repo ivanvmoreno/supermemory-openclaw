@@ -158,7 +158,7 @@ function mmrRerank(
 
   while (selected.length < limit && remaining.length > 0) {
     let bestIdx = 0;
-    let bestScore = -Infinity;
+    let bestScore = Number.NEGATIVE_INFINITY;
 
     for (let i = 0; i < remaining.length; i++) {
       const relevance = remaining[i].score;

@@ -253,7 +253,7 @@ export class MemoryDB {
 
     if (this.vecAvailable && params.vector) {
       this.db
-        .prepare(`INSERT INTO memories_vec (id, vector) VALUES (?, ?)`)
+        .prepare("INSERT INTO memories_vec (id, vector) VALUES (?, ?)")
         .run(id, float64ToBlob(params.vector));
     }
 
@@ -274,7 +274,7 @@ export class MemoryDB {
   }
 
   getMemory(id: string): MemoryRow | null {
-    const row = this.db.prepare(`SELECT * FROM memories WHERE id = ?`).get(id) as
+    const row = this.db.prepare("SELECT * FROM memories WHERE id = ?").get(id) as
       | Record<string, unknown>
       | undefined;
     if (!row) return null;
@@ -287,21 +287,21 @@ export class MemoryDB {
       throw new Error(`Invalid memory ID format: ${id}`);
     }
     if (this.vecAvailable) {
-      this.db.prepare(`DELETE FROM memories_vec WHERE id = ?`).run(id);
+      this.db.prepare("DELETE FROM memories_vec WHERE id = ?").run(id);
     }
-    const result = this.db.prepare(`DELETE FROM memories WHERE id = ?`).run(id);
+    const result = this.db.prepare("DELETE FROM memories WHERE id = ?").run(id);
     return (result as unknown as { changes: number }).changes > 0;
   }
 
   markSuperseded(id: string): void {
-    this.db.prepare(`UPDATE memories SET is_superseded = 1, updated_at = ? WHERE id = ?`).run(Date.now(), id);
+    this.db.prepare("UPDATE memories SET is_superseded = 1, updated_at = ? WHERE id = ?").run(Date.now(), id);
   }
 
   bumpAccessCount(id: string): void {
     const now = Date.now();
     this.db
       .prepare(
-        `UPDATE memories SET access_count = access_count + 1, last_accessed_at = ? WHERE id = ?`,
+        "UPDATE memories SET access_count = access_count + 1, last_accessed_at = ? WHERE id = ?",
       )
       .run(now, id);
   }
@@ -309,12 +309,12 @@ export class MemoryDB {
   countMemories(containerTag?: string): number {
     if (containerTag) {
       const row = this.db
-        .prepare(`SELECT COUNT(*) as cnt FROM memories WHERE container_tag = ? AND is_superseded = 0`)
+        .prepare("SELECT COUNT(*) as cnt FROM memories WHERE container_tag = ? AND is_superseded = 0")
         .get(containerTag) as { cnt: number };
       return row.cnt;
     }
     const row = this.db
-      .prepare(`SELECT COUNT(*) as cnt FROM memories WHERE is_superseded = 0`)
+      .prepare("SELECT COUNT(*) as cnt FROM memories WHERE is_superseded = 0")
       .get() as { cnt: number };
     return row.cnt;
   }
@@ -343,7 +343,7 @@ export class MemoryDB {
     const vectorBlob = float64ToBlob(queryVector);
     const rows = this.db
       .prepare(
-        `SELECT id, distance FROM memories_vec WHERE vector MATCH ? ORDER BY distance LIMIT ?`,
+        "SELECT id, distance FROM memories_vec WHERE vector MATCH ? ORDER BY distance LIMIT ?"
       )
       .all(vectorBlob, limit * 2) as Array<{ id: string; distance: number }>;
 

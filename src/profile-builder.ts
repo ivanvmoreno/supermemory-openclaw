@@ -22,7 +22,7 @@ const MAX_STATIC_ITEMS = 20;
 const MAX_DYNAMIC_ITEMS = 10;
 const DYNAMIC_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-export function buildUserProfile(db: MemoryDB, cfg: SupermemoryConfig): UserProfile {
+export function buildUserProfile(db: MemoryDB, _cfg: SupermemoryConfig): UserProfile {
   const now = Date.now();
 
   // Static profile: high-importance, long-lived facts
