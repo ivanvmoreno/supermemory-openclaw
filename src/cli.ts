@@ -4,7 +4,6 @@ import type { EmbeddingProvider } from "./embeddings.ts";
 import { hybridSearch } from "./search.ts";
 import { getOrBuildProfile, buildUserProfile } from "./profile-builder.ts";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Commander = any;
 
 export function registerSupermemoryCli(

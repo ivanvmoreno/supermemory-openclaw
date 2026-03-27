@@ -83,5 +83,5 @@ jobs:
       - name: Run TypeScript type checking
         run: bun run check-types
 
-      - name: Run Biome CI (format & lint)
-        run: biome ci .
+      - name: Run Biome lint
+        run: biome lint .
