@@ -7,49 +7,42 @@ Local graph-based memory plugin for [OpenClaw](https://github.com/nichochar/open
 - **Graph Memory** — Automatic entity extraction (people, projects, emails) and relationship tracking (updates / extends / derives)
 - **User Profiles** — Static long-term facts + dynamic recent context, automatically maintained and injected into system prompt
 - **Automatic Forgetting** — Temporal expiration for time-bound facts, decay for low-importance unused memories, contradiction resolution
-- **Hybrid Search** — Vector similarity (sqlite-vec) + BM25 keyword (FTS5) + graph-augmented multi-hop retrieval with MMR diversity re-ranking
+- **Hybrid Search** — BM25 keyword (FTS5) + graph-augmented multi-hop retrieval with MMR diversity re-ranking. Vector similarity (sqlite-vec) used when available.
 - **Auto-Recall** — Injects relevant memories + user profile before every AI turn
 - **Auto-Capture** — Extracts and stores important information from conversations automatically
-- **Fully Local** — SQLite storage + Ollama embeddings, zero cloud dependencies
+- **Fully Local** — SQLite storage, zero cloud dependencies (cloud embeddings optional)
 
-## Install
+## Quick Start
+
+### Step 1: Install the plugin
 
 ```bash
 openclaw plugins install openclaw-memory-supermemory
 ```
 
-Restart OpenClaw after installing.
+### Step 2: Configure OpenClaw
 
-## Setup
-
-### Prerequisites
-
-For local embeddings, install [Ollama](https://ollama.ai) and pull a model:
-
-```bash
-ollama pull nomic-embed-text
-```
-
-### Configuration
-
-Add to `~/.openclaw/openclaw.json`:
+Edit `~/.openclaw/openclaw.json` and add **both** the memory slot and the plugin entry:
 
 ```json5
 {
   plugins: {
+    // REQUIRED: Assign this plugin to the memory slot
     slots: {
       memory: "openclaw-memory-supermemory"
     },
+    // RECOMMENDED: Suppress the auto-load security warning
+    allow: ["openclaw-memory-supermemory"],
+    // Plugin configuration
     entries: {
       "openclaw-memory-supermemory": {
         enabled: true,
         config: {
-          // Embedding (defaults to Ollama + nomic-embed-text)
           embedding: {
-            provider: "ollama",
-            model: "nomic-embed-text"
+            provider: "openai",
+            model: "text-embedding-3-small",
+            apiKey: "${OPENAI_API_KEY}"    // reads from env var
           },
-          // Behavior
           autoRecall: true,
           autoCapture: true
         }
@@ -59,25 +52,91 @@ Add to `~/.openclaw/openclaw.json`:
 }
 ```
 
-### Using OpenAI Embeddings Instead
+> **Important:** The `slots.memory` line is required — without it, OpenClaw won't use the plugin even if it's installed.
+
+### Step 3: Restart OpenClaw
+
+Restart the OpenClaw gateway for the plugin to load.
+
+### Step 4: Verify it works
+
+```bash
+openclaw supermemory stats
+```
+
+You should see output like:
+
+```
+Total memories:      0
+Active memories:     0
+Superseded memories: 0
+Entities:            0
+Relationships:       0
+Vector search:       unavailable
+```
+
+Zero counts are normal on first run. `Vector search: unavailable` is expected — see [Vector Search](#vector-search) below.
+
+## Embedding Providers
+
+You need an embedding provider for semantic search. Choose one:
+
+### OpenAI (recommended for simplicity)
 
 ```json5
-{
-  plugins: {
-    entries: {
-      "openclaw-memory-supermemory": {
-        config: {
-          embedding: {
-            provider: "openai",
-            model: "text-embedding-3-small",
-            apiKey: "${OPENAI_API_KEY}"
-          }
-        }
-      }
-    }
-  }
+embedding: {
+  provider: "openai",
+  model: "text-embedding-3-small",
+  apiKey: "${OPENAI_API_KEY}"
 }
 ```
+
+Set the environment variable before starting OpenClaw:
+
+```bash
+export OPENAI_API_KEY="sk-..."
+```
+
+### Ollama (fully local, no API key)
+
+Install [Ollama](https://ollama.ai) and pull a model:
+
+```bash
+ollama pull nomic-embed-text
+```
+
+```json5
+embedding: {
+  provider: "ollama",
+  model: "nomic-embed-text"
+}
+```
+
+### Other OpenAI-compatible providers
+
+Any provider with an OpenAI-compatible `/v1/embeddings` endpoint works:
+
+```json5
+embedding: {
+  provider: "openai",
+  model: "your-model-name",
+  apiKey: "${YOUR_API_KEY}",
+  baseUrl: "https://your-provider.com/v1"
+}
+```
+
+### Supported models (auto-detected dimensions)
+
+| Model | Provider | Dimensions |
+|-------|----------|-----------|
+| `nomic-embed-text` | Ollama | 768 |
+| `text-embedding-3-small` | OpenAI | 1536 |
+| `text-embedding-3-large` | OpenAI | 3072 |
+| `mxbai-embed-large` | Ollama | 1024 |
+| `all-minilm` | Ollama | 384 |
+| `snowflake-arctic-embed` | Ollama | 1024 |
+
+For other models, set `embedding.dimensions` explicitly.
 
 ## How It Works
 
@@ -104,20 +163,94 @@ The AI uses these tools autonomously:
 ## CLI Commands
 
 ```bash
+openclaw supermemory stats              # Show memory statistics
 openclaw supermemory search <query>     # Search memories
+openclaw supermemory search "rust" --limit 5
 openclaw supermemory profile            # View user profile
 openclaw supermemory profile --rebuild  # Force rebuild profile
-openclaw supermemory stats              # Show memory statistics
 openclaw supermemory wipe --confirm     # Delete all memories
 ```
 
-## Configuration Options
+## Verifying Memories
+
+After chatting with the AI, you can verify memories are being captured:
+
+```bash
+# Check memory counts increased
+openclaw supermemory stats
+
+# Search for something you mentioned
+openclaw supermemory search "your topic"
+
+# View your auto-built profile
+openclaw supermemory profile
+```
+
+You can also query the SQLite database directly:
+
+```bash
+sqlite3 ~/.openclaw/memory/supermemory.db
+
+# Recent memories
+SELECT category, substr(text, 1, 80), datetime(created_at/1000, 'unixepoch')
+FROM memories ORDER BY created_at DESC LIMIT 10;
+
+# Extracted entities
+SELECT name, type FROM entities;
+```
+
+## Vector Search
+
+The plugin uses FTS5 keyword search + graph traversal by default. Vector similarity search requires `sqlite-vec`, which is bundled with OpenClaw's built-in memory system but not automatically available to external plugins.
+
+**`Vector search: unavailable` is normal** — the plugin works well without it. FTS5 keyword matching + graph-augmented retrieval provide good recall for most use cases.
+
+If your OpenClaw build includes `sqlite-vec`, the plugin will detect and use it automatically.
+
+## Troubleshooting
+
+### "plugin already exists" on install
+
+Delete the old install first:
+
+```bash
+rm -rf ~/.openclaw/extensions/openclaw-memory-supermemory
+openclaw plugins install openclaw-memory-supermemory
+```
+
+### "memory slot plugin not found"
+
+You have `plugins.slots.memory` pointing to a plugin that isn't installed. Either reinstall the plugin or remove the slot:
+
+```json5
+// Remove this line from ~/.openclaw/openclaw.json to revert to default memory:
+slots: { memory: "openclaw-memory-supermemory" }
+```
+
+### Plugin loads but no memories are captured
+
+1. Make sure `slots.memory` is set (not just `entries`)
+2. Enable debug logging: set `debug: true` in the plugin config
+3. Check OpenClaw logs for `memory-supermemory:` messages
+4. Verify embedding connectivity — the AI needs to be able to embed text. Try `openclaw supermemory search "test"` and check for errors.
+
+### "plugins.allow is empty" warning
+
+Not an error — just a security reminder. Suppress it by adding:
+
+```json5
+plugins: {
+  allow: ["openclaw-memory-supermemory"]
+}
+```
+
+## Configuration Reference
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `embedding.provider` | string | `"ollama"` | Embedding provider (`ollama`, `openai`, etc.) |
 | `embedding.model` | string | `"nomic-embed-text"` | Embedding model name |
-| `embedding.apiKey` | string | — | API key (cloud providers only) |
+| `embedding.apiKey` | string | — | API key (cloud providers only, supports `${ENV_VAR}` syntax) |
 | `embedding.baseUrl` | string | — | Custom API base URL |
 | `embedding.dimensions` | number | auto | Vector dimensions (auto-detected for known models) |
 | `autoCapture` | boolean | `true` | Auto-capture memories from conversations |
@@ -193,13 +326,11 @@ git push origin v0.2.0
 
 This triggers `release.yml` which:
 1. **Validates** — typechecks, lints, validates plugin manifest
-2. **Publishes to ClawHub** — via `clawhub` CLI (requires `CLAWHUB_TOKEN` secret)
-3. **Publishes to npm** — via OIDC trusted publishing (no secret needed)
-4. **Creates GitHub Release** — with zip archive and auto-generated release notes
+2. **Publishes to npm** — via OIDC trusted publishing (no secret needed)
+3. **Creates GitHub Release** — with zip archive and auto-generated release notes
 
 ### Required secrets
 
 | Secret | Purpose | When needed |
 |--------|---------|-------------|
 | `NPM_TOKEN` | Bootstrap first npm publish only | Delete after first publish |
-| `CLAWHUB_TOKEN` | ClawHub plugin registry auth | All releases |
