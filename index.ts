@@ -226,7 +226,7 @@ export default {
 
     if (cfg.autoRecall) {
       api.on(
-        "before_agent_start",
+        "before_prompt_build",
         createAutoRecallHook(db, embeddings, cfg, state, api.logger),
       )
     }

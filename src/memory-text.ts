@@ -15,8 +15,8 @@ const SYNTHETIC_MEMORY_PATTERNS = [
   /Pre-compaction memory flush/i,
   /session is near auto-compaction/i,
   /##\s*Memory \(Supermemory Graph\)/i,
-  /\buse memory_search\b/i,
-  /\buse memory_store\b/i,
+  /^use memory_search to\b/i,
+  /^use memory_store to\b/i,
   /^System:\s*\[/i,
   /Sender \(untrusted metadata\):/i,
   /\bWhatsApp gateway (?:connected|disconnected)\b/i,
@@ -41,7 +41,7 @@ export function stripInjectedMemoryContext(text: string): string {
 export function isSyntheticMemoryText(text: string): boolean {
   const cleaned = stripInjectedMemoryContext(text);
   if (!cleaned) return true;
-  if (cleaned.startsWith("<") && cleaned.includes("</")) return true;
+  if (/^<(?:supermemory|relevant-memories|system|assistant|developer|tool|function)[-\s>]/i.test(cleaned)) return true;
   return SYNTHETIC_MEMORY_PATTERNS.some((pattern) => pattern.test(cleaned));
 }
 

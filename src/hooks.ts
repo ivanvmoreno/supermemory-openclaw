@@ -46,6 +46,11 @@ const CAPTURE_TRIGGERS = [
   /i (like|prefer|hate|love|want|need|always|never)/i,
   /important|critical|always|never/i,
   /working on|building|developing|fixing/i,
+  /\b(?:the user|you) (?:prefer|like|want|need|use|mentioned|said)/i,
+  /\b(?:we|you) decided|agreed|settled on/i,
+  /\b(?:project|repo|stack|framework|language|tool)\b.{0,30}\b(?:is|uses?|built with)/i,
+  /\b(?:name|email|phone|role|team|company|location)\b.{0,20}\b(?:is|are)\b/i,
+  /\b(?:deadline|meeting|sprint|release|deploy|launch)\b/i,
 ];
 
 export function shouldCapture(text: string, maxChars: number): boolean {
@@ -97,7 +102,7 @@ function extractTextBlocks(content: unknown): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Auto-recall hook
+// Auto-recall hook (before_prompt_build — current API)
 // ---------------------------------------------------------------------------
 
 export function createAutoRecallHook(
@@ -107,7 +112,7 @@ export function createAutoRecallHook(
   state: { interactionCount: number },
   log: Logger,
 ) {
-  return async (event: { prompt?: string }) => {
+  return async (event: { prompt: string; messages: unknown[] }) => {
     if (!cfg.autoRecall) return;
     if (!event.prompt || event.prompt.length < 5) return;
 
@@ -192,8 +197,7 @@ export function createAutoCaptureHook(
         if (!msg || typeof msg !== "object") continue;
         const msgObj = msg as Record<string, unknown>;
 
-        // Only capture user messages to avoid self-poisoning
-        if (msgObj.role !== "user") continue;
+        if (msgObj.role !== "user" && msgObj.role !== "assistant") continue;
 
         texts.push(...extractTextBlocks(msgObj.content));
       }
@@ -203,6 +207,12 @@ export function createAutoCaptureHook(
         .filter((text): text is string => !!text)
         .filter((text) => shouldCapture(text, cfg.captureMaxChars))
         .filter(dedupeCaptureCandidates);
+
+      if (cfg.debug && texts.length > 0 && toCapture.length === 0) {
+        log.info(
+          `memory-supermemory: auto-capture skipped ${texts.length} text(s) — no capture triggers matched`,
+        );
+      }
 
       if (toCapture.length === 0) return;
 
