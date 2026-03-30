@@ -4,13 +4,13 @@ Local graph-based memory plugin for [OpenClaw](https://github.com/nichochar/open
 
 ## Features
 
-- **Graph Memory** — Automatic entity extraction (people, projects, emails) and relationship tracking (updates / extends / derives)
-- **User Profiles** — Static long-term facts + dynamic recent context, automatically maintained and injected into system prompt
-- **Automatic Forgetting** — Temporal expiration for time-bound facts, decay for low-importance unused memories, contradiction resolution
-- **Hybrid Search** — BM25 keyword (FTS5) + graph-augmented multi-hop retrieval with MMR diversity re-ranking. Vector similarity (sqlite-vec) used when available.
-- **Auto-Recall** — Injects relevant memories + user profile before every AI turn.
+- **LLM Fact Extraction** — Extracts discrete, entity-centric facts from each conversation turn via an LLM subagent, matching Supermemory's cloud approach locally.
+- **Graph Memory** — Automatic entity extraction, relationship tracking (Updates / Extends / Derives), memory versioning with `parent_memory_id` chains.
+- **User Profiles** — Static long-term facts + dynamic recent context, automatically maintained and injected into system prompt. Static memories (`is_static`) are protected from decay.
+- **Automatic Forgetting** — Temporal expiration for time-bound facts (including absolute dates like "January 15"), decay for low-importance unused memories, contradiction resolution.
+- **Hybrid Search** — BM25 keyword (FTS5) + graph-augmented multi-hop retrieval with MMR diversity re-ranking. Superseded memories are filtered at the query level. Vector similarity (sqlite-vec) used when available.
+- **Auto-Recall** — Injects relevant memories + user profile before every AI turn via the `before_prompt_build` hook.
 - **OpenClaw Runtime Integration** — Registers memory tools, a built-in memory search manager, and a pre-compaction memory flush plan when the host API supports them.
-- **Fully Local** — SQLite storage, no external dependencies (cloud embeddings optional).
 
 ## Quick Start
 
@@ -141,9 +141,8 @@ For other models, set `embedding.dimensions` explicitly.
 ## How It Works
 
 1. **You talk to your AI normally.** Share preferences, mention projects, discuss problems.
-2. **Auto-capture** extracts important facts from your messages — preferences, decisions, entities, project context.
-   It only considers the last real user turn and strips any memory/profile blocks that were injected into prompt context.
-3. **Graph engine** links memories via entities and detects relationships:
+2. **Auto-capture** uses your configured LLM to extract discrete facts from the last conversation turn (both user and assistant messages).
+3. **Graph engine** links each extracted fact to entities and detects relationships:
    - **Updates** — "I moved to SF" supersedes "I live in NYC"
    - **Extends** — "I lead a team of 5" enriches "I'm a PM at Stripe"
    - **Derives** — Inferred connections from shared entities
@@ -157,7 +156,7 @@ The AI uses these tools autonomously:
 | Tool | Description |
 |------|-------------|
 | `memory_search` | Hybrid search across all memories (vector + keyword + graph) |
-| `memory_store` | Save information with automatic entity extraction and relationship detection |
+| `memory_store` | Save information with automatic entity extraction, relationship detection, and optional `isStatic` flag for permanent facts |
 | `memory_forget` | Delete memories by ID or search query |
 | `memory_profile` | View/rebuild the automatically maintained user profile |
 
@@ -215,6 +214,7 @@ plugins: {
 | `embedding.baseUrl` | string | — | Custom API base URL |
 | `embedding.dimensions` | number | auto | Vector dimensions (auto-detected for known models) |
 | `autoCapture` | boolean | `true` | Auto-capture memories from conversations |
+| `captureMode` | string | `"extract"` | `"extract"` (LLM fact extraction) or `"off"` (disable auto-capture) |
 | `autoRecall` | boolean | `true` | Auto-inject memories + profile into context |
 | `profileFrequency` | number | `50` | Rebuild user profile every N interactions |
 | `entityExtraction` | string | `"pattern"` | Current implementation is pattern-based. `"llm"` is reserved and currently behaves the same as `"pattern"`. |
@@ -227,6 +227,22 @@ plugins: {
 | `dbPath` | string | `~/.openclaw/memory/supermemory.db` | SQLite database path |
 | `captureMaxChars` | number | `2000` | Max message length for auto-capture |
 | `debug` | boolean | `false` | Enable verbose logging |
+
+## Fact Extraction
+
+By default, the plugin uses your configured LLM to extract discrete, entity-centric facts from each conversation turn.
+
+**Input conversation:**
+> "Caught up with Iván Moreno today. He's working at Santander as an AI Scientist now, doing research on knowledge graphs. He's really into the graph-based memory space and mentioned a deadline next Tuesday for a paper submission."
+
+**Extracted memories:**
+- Iván Moreno works at Santander as an AI Scientist
+- Iván Moreno researches knowledge graphs
+- Iván Moreno has a paper submission deadline next Tuesday
+
+Each fact is stored as a separate memory with automatic entity linking, relationship detection (Updates/Extends/Derives), and temporal expiration.
+
+Set `captureMode: "off"` to disable auto-capture entirely.
 
 ## Architecture
 
@@ -244,7 +260,8 @@ openclaw-memory-supermemory/
 │   ├── config.ts               # Config parsing + defaults
 │   ├── db.ts                   # SQLite: memories, entities, relationships, profiles
 │   ├── embeddings.ts           # Ollama + OpenAI-compatible embedding providers
-│   ├── graph-engine.ts         # Entity extraction, relationship detection
+│   ├── fact-extractor.ts        # LLM fact extraction via OpenClaw subagent
+│   ├── graph-engine.ts         # Entity extraction, relationship detection, temporal parsing
 │   ├── memory-text.ts          # Injected/synthetic memory filtering and prompt-safe sanitization
 │   ├── search.ts               # Hybrid search (vector + FTS5 + graph)
 │   ├── profile-builder.ts      # Static + dynamic user profile
@@ -258,7 +275,7 @@ openclaw-memory-supermemory/
 
 All data stored in a single SQLite database:
 
-- **memories** — Text, embeddings, importance, category, expiration, access tracking
+- **memories** — Text, embeddings, importance, category, expiration, access tracking, `is_static`, `parent_memory_id`
 - **entities** — Extracted entities (people, projects, tech, emails, URLs)
 - **entity_mentions** — Links between memories and entities
 - **relationships** — Graph edges (updates / extends / derives)

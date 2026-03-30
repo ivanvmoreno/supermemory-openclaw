@@ -231,10 +231,11 @@ export default {
       )
     }
 
-    if (cfg.autoCapture) {
+    if (cfg.autoCapture && cfg.captureMode !== "off") {
+      const subagent = (api as unknown as { runtime?: { subagent?: unknown } }).runtime?.subagent ?? null;
       api.on(
         "agent_end",
-        createAutoCaptureHook(db, embeddings, cfg, api.logger),
+        createAutoCaptureHook(db, embeddings, cfg, api.logger, subagent as any),
       )
     }
 

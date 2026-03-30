@@ -20,6 +20,8 @@ export type MemoryRow = {
   updated_at: number;
   expires_at: number | null;
   is_superseded: boolean;
+  is_static: boolean;
+  parent_memory_id: string | null;
   access_count: number;
   last_accessed_at: number | null;
 };
@@ -102,6 +104,7 @@ export class MemoryDB {
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
     this.initSchema();
+    this.migrateSchema();
     this.tryLoadVec();
   }
 
@@ -207,6 +210,18 @@ export class MemoryDB {
     `);
   }
 
+  private migrateSchema(): void {
+    const safeAddColumn = (table: string, col: string, def: string) => {
+      try {
+        this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+      } catch {
+        // column already exists
+      }
+    };
+    safeAddColumn("memories", "is_static", "INTEGER NOT NULL DEFAULT 0");
+    safeAddColumn("memories", "parent_memory_id", "TEXT");
+  }
+
   private tryLoadVec(): void {
     try {
       // sqlite-vec extension — same pattern as memory-core
@@ -238,6 +253,8 @@ export class MemoryDB {
     category?: MemoryCategory;
     containerTag?: string;
     expiresAt?: number | null;
+    isStatic?: boolean;
+    parentMemoryId?: string | null;
     createdAt?: number;
     updatedAt?: number;
   }): MemoryRow {
@@ -247,13 +264,16 @@ export class MemoryDB {
     const importance = params.importance ?? 0.5;
     const category = params.category ?? "other";
     const containerTag = params.containerTag ?? "default";
+    const isStatic = params.isStatic ? 1 : 0;
+    const parentMemoryId = params.parentMemoryId ?? null;
     const vectorBlob = params.vector ? float64ToBlob(params.vector) : null;
 
     this.db
       .prepare(
         `INSERT INTO memories (id, text, vector, importance, category, container_tag,
-         created_at, updated_at, expires_at, is_superseded, access_count, last_accessed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, NULL)`,
+         created_at, updated_at, expires_at, is_superseded, is_static, parent_memory_id,
+         access_count, last_accessed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 0, NULL)`,
       )
       .run(
         id,
@@ -265,6 +285,8 @@ export class MemoryDB {
         createdAt,
         updatedAt,
         params.expiresAt ?? null,
+        isStatic,
+        parentMemoryId,
       );
 
     if (this.vecAvailable && params.vector) {
@@ -284,6 +306,8 @@ export class MemoryDB {
       updated_at: updatedAt,
       expires_at: params.expiresAt ?? null,
       is_superseded: false,
+      is_static: !!params.isStatic,
+      parent_memory_id: parentMemoryId,
       access_count: 0,
       last_accessed_at: null,
     };
@@ -339,6 +363,10 @@ export class MemoryDB {
     this.db.prepare("UPDATE memories SET is_superseded = 1, updated_at = ? WHERE id = ?").run(Date.now(), id);
   }
 
+  setParentMemoryId(id: string, parentId: string): void {
+    this.db.prepare("UPDATE memories SET parent_memory_id = ?, updated_at = ? WHERE id = ?").run(parentId, Date.now(), id);
+  }
+
   bumpAccessCount(id: string): void {
     const now = Date.now();
     this.db
@@ -383,18 +411,29 @@ export class MemoryDB {
   ): Array<{ id: string; score: number }> {
     if (!this.vecAvailable) return [];
     const vectorBlob = float64ToBlob(queryVector);
+    // Over-fetch to compensate for post-filtering superseded memories
     const rows = this.db
       .prepare(
         "SELECT id, distance FROM memories_vec WHERE vector MATCH ? ORDER BY distance LIMIT ?"
       )
-      .all(vectorBlob, limit * 2) as Array<{ id: string; distance: number }>;
+      .all(vectorBlob, limit * 4) as Array<{ id: string; distance: number }>;
 
+    // Post-filter superseded memories (vec0 doesn't support JOINs)
+    const supersededIds = this.getSupersededIds();
     return rows
+      .filter((r) => !supersededIds.has(r.id))
       .map((r) => ({
         id: r.id,
         score: 1 / (1 + r.distance),
       }))
       .filter((r) => r.score >= minScore);
+  }
+
+  private getSupersededIds(): Set<string> {
+    const rows = this.db
+      .prepare("SELECT id FROM memories WHERE is_superseded = 1")
+      .all() as Array<{ id: string }>;
+    return new Set(rows.map((r) => r.id));
   }
 
   // -----------------------------------------------------------------------
@@ -409,9 +448,13 @@ export class MemoryDB {
     const ftsQuery = terms.map((t) => `"${t}"`).join(" OR ");
 
     try {
+      // Join against memories table to exclude superseded entries
       const rows = this.db
         .prepare(
-          `SELECT id, rank FROM memories_fts WHERE memories_fts MATCH ? ORDER BY rank LIMIT ?`,
+          `SELECT f.id, f.rank FROM memories_fts f
+           JOIN memories m ON m.id = f.id
+           WHERE memories_fts MATCH ? AND m.is_superseded = 0
+           ORDER BY f.rank LIMIT ?`,
         )
         .all(ftsQuery, limit) as Array<{ id: string; rank: number }>;
 
@@ -612,7 +655,8 @@ export class MemoryDB {
     const candidates = this.db
       .prepare(
         `SELECT id FROM memories
-         WHERE importance < ? AND access_count = 0 AND created_at < ? AND is_superseded = 0`,
+         WHERE importance < ? AND access_count = 0 AND created_at < ?
+           AND is_superseded = 0 AND is_static = 0`,
       )
       .all(minImportance, cutoff) as Array<{ id: string }>;
 
@@ -687,6 +731,8 @@ export class MemoryDB {
       updated_at: row.updated_at as number,
       expires_at: (row.expires_at as number | null) ?? null,
       is_superseded: !!(row.is_superseded as number),
+      is_static: !!(row.is_static as number),
+      parent_memory_id: (row.parent_memory_id as string | null) ?? null,
       access_count: row.access_count as number,
       last_accessed_at: (row.last_accessed_at as number | null) ?? null,
     };

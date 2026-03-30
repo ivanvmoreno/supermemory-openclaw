@@ -22,12 +22,15 @@ export const MEMORY_CATEGORIES = [
 
 export type EntityExtractionMode = "pattern" | "llm";
 
+export type CaptureMode = "extract" | "off";
+
 export type RelationType = "updates" | "extends" | "derives";
 
 export type SupermemoryConfig = {
   embedding: EmbeddingConfig;
   autoCapture: boolean;
   autoRecall: boolean;
+  captureMode: CaptureMode;
   profileFrequency: number;
   entityExtraction: EntityExtractionMode;
   forgetExpiredIntervalMinutes: number;
@@ -126,6 +129,7 @@ export function parseSupermemoryConfig(value: unknown): SupermemoryConfig {
     textWeight: clampNumber(cfg.textWeight, DEFAULT_TEXT_WEIGHT, 0, 1),
     graphWeight: clampNumber(cfg.graphWeight, DEFAULT_GRAPH_WEIGHT, 0, 1),
     dbPath,
+    captureMode: cfg.captureMode === "off" ? "off" : "extract",
     captureMaxChars: clampNumber(cfg.captureMaxChars, DEFAULT_CAPTURE_MAX_CHARS, 100, 10000),
     debug: cfg.debug === true,
   };

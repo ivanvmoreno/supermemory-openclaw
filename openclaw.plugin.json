@@ -17,6 +17,7 @@
         }
       },
       "autoCapture": { "type": "boolean" },
+      "captureMode": { "type": "string", "enum": ["extract", "off"] },
       "autoRecall": { "type": "boolean" },
       "profileFrequency": { "type": "number", "minimum": 1, "maximum": 1000 },
       "entityExtraction": { "type": "string", "enum": ["pattern", "llm"] },
@@ -62,6 +63,10 @@
     "autoCapture": {
       "label": "Auto-Capture",
       "help": "Automatically extract and store memories from conversations"
+    },
+    "captureMode": {
+      "label": "Capture Mode",
+      "help": "\"extract\" (LLM fact extraction, default) or \"off\" (disable auto-capture)"
     },
     "autoRecall": {
       "label": "Auto-Recall",

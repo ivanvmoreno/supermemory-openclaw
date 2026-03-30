@@ -117,18 +117,23 @@ export function createMemoryStoreTool(ctx: ToolContext): ToolDefinition {
           description: "Memory category (auto-detected if omitted)",
         }),
       ),
+      isStatic: Type.Optional(
+        Type.Boolean({ description: "Mark as permanent identity fact (name, hometown) that should never decay. Default: false" }),
+      ),
       containerTag: Type.Optional(Type.String({ description: "Container tag for scoping" })),
     }),
     async execute(_toolCallId, params) {
       const text = params.text as string;
       const importance = params.importance as number | undefined;
       const category = params.category as MemoryCategory | undefined;
+      const isStatic = params.isStatic as boolean | undefined;
       const containerTag = params.containerTag as string | undefined;
 
       const memory = await processNewMemory(text, ctx.db, ctx.embeddings, {
         containerTag,
         categoryOverride: category,
         importanceOverride: importance,
+        isStatic,
       });
 
       const entities = ctx.db.getEntitiesForMemory(memory.id);

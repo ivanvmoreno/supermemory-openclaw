@@ -66,6 +66,13 @@ const TEMPORAL_PATTERNS: Array<{ pattern: RegExp; offsetMs: number }> = [
   { pattern: /\bthis month\b/i, offsetMs: 31 * 24 * 60 * 60 * 1000 },
 ];
 
+const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+const MONTH_NAMES: Record<string, number> = {
+  jan: 0, january: 0, feb: 1, february: 1, mar: 2, march: 2, apr: 3, april: 3,
+  may: 4, jun: 5, june: 5, jul: 6, july: 6, aug: 7, august: 7,
+  sep: 8, september: 8, oct: 9, october: 9, nov: 10, november: 10, dec: 11, december: 11,
+};
+
 // ---------------------------------------------------------------------------
 // Entity extraction
 // ---------------------------------------------------------------------------
@@ -168,11 +175,57 @@ export function detectImportance(text: string, category: MemoryCategory): number
 // ---------------------------------------------------------------------------
 
 export function detectExpiration(text: string, referenceTimeMs = Date.now()): number | null {
+  // 1. Relative patterns (tomorrow, this week, etc.)
   for (const { pattern, offsetMs } of TEMPORAL_PATTERNS) {
     if (pattern.test(text)) {
       return referenceTimeMs + offsetMs;
     }
   }
+
+  // 2. "next Tuesday", "next Monday", etc.
+  const nextDayMatch = text.match(/\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
+  if (nextDayMatch) {
+    const targetDay = DAY_NAMES.indexOf(nextDayMatch[1].toLowerCase());
+    if (targetDay >= 0) {
+      const now = new Date(referenceTimeMs);
+      const currentDay = now.getDay();
+      let daysUntil = targetDay - currentDay;
+      if (daysUntil <= 0) daysUntil += 7;
+      daysUntil += 7; // "next" means the week after
+      return referenceTimeMs + daysUntil * 24 * 60 * 60 * 1000 + 24 * 60 * 60 * 1000;
+    }
+  }
+
+  // 3. Absolute dates: "January 15", "March 3rd", "Dec 25"
+  const absoluteDateMatch = text.match(
+    /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?\b/i,
+  );
+  if (absoluteDateMatch) {
+    const month = MONTH_NAMES[absoluteDateMatch[1].toLowerCase()];
+    const day = Number.parseInt(absoluteDateMatch[2], 10);
+    if (month !== undefined && day >= 1 && day <= 31) {
+      const now = new Date(referenceTimeMs);
+      let year = now.getFullYear();
+      const target = new Date(year, month, day, 23, 59, 59);
+      if (target.getTime() < referenceTimeMs) {
+        target.setFullYear(year + 1);
+      }
+      return target.getTime();
+    }
+  }
+
+  // 4. ISO-like dates: "2026-04-15", "04/15"
+  const isoMatch = text.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+  if (isoMatch) {
+    const target = new Date(
+      Number.parseInt(isoMatch[1], 10),
+      Number.parseInt(isoMatch[2], 10) - 1,
+      Number.parseInt(isoMatch[3], 10),
+      23, 59, 59,
+    );
+    if (!Number.isNaN(target.getTime())) return target.getTime();
+  }
+
   return null;
 }
 
@@ -212,6 +265,7 @@ export async function detectRelationships(
   _embeddings: EmbeddingProvider,
 ): Promise<DetectedRelationship[]> {
   const relationships: DetectedRelationship[] = [];
+  const seenTargets = new Set<string>();
 
   // Get entities from new memory
   const newEntities = extractEntities(newMemory.text);
@@ -224,38 +278,58 @@ export async function detectRelationships(
 
     const relatedMemories = db.getMemoriesForEntity(existingEntity.id);
     for (const existing of relatedMemories) {
-      if (existing.id === newMemory.id) continue;
+      if (existing.id === newMemory.id || seenTargets.has(existing.id)) continue;
+
+      if (!newMemory.vector || !existing.vector) continue;
+      const similarity = cosineSimilarity(newMemory.vector, existing.vector);
 
       // Check if new memory contradicts/updates existing
-      const isContradiction = CONTRADICTION_INDICATORS.some((p) => p.test(newMemory.text));
-      if (isContradiction) {
-        // Use vector similarity to confirm they're about the same topic
-        if (newMemory.vector && existing.vector) {
-          const similarity = cosineSimilarity(newMemory.vector, existing.vector);
-          if (similarity > 0.5) {
-            relationships.push({
-              targetId: existing.id,
-              relationType: "updates",
-              confidence: Math.min(1, similarity + 0.2),
-            });
-            continue;
-          }
-        }
+      const hasContradictionKeywords = CONTRADICTION_INDICATORS.some((p) => p.test(newMemory.text));
+
+      // Implicit update: very high similarity between memories sharing an entity
+      // suggests the new fact replaces the old one (even without explicit contradiction words)
+      if (hasContradictionKeywords && similarity > 0.5) {
+        relationships.push({
+          targetId: existing.id,
+          relationType: "updates",
+          confidence: Math.min(1, similarity + 0.2),
+        });
+        seenTargets.add(existing.id);
+        continue;
+      }
+
+      // Semantic-only update detection: if two facts about the same entity
+      // are very similar (>0.7), the newer one likely supersedes the older
+      if (similarity > 0.7) {
+        relationships.push({
+          targetId: existing.id,
+          relationType: "updates",
+          confidence: similarity,
+        });
+        seenTargets.add(existing.id);
+        continue;
       }
 
       // Check if new memory extends existing
       const isExtension = EXTENSION_INDICATORS.some((p) => p.test(newMemory.text));
-      if (isExtension) {
-        if (newMemory.vector && existing.vector) {
-          const similarity = cosineSimilarity(newMemory.vector, existing.vector);
-          if (similarity > 0.4) {
-            relationships.push({
-              targetId: existing.id,
-              relationType: "extends",
-              confidence: similarity,
-            });
-          }
-        }
+      if (isExtension && similarity > 0.4) {
+        relationships.push({
+          targetId: existing.id,
+          relationType: "extends",
+          confidence: similarity,
+        });
+        seenTargets.add(existing.id);
+        continue;
+      }
+
+      // Derive: moderate similarity between facts sharing an entity suggests a connection
+      if (similarity > 0.3 && similarity <= 0.7) {
+        relationships.push({
+          targetId: existing.id,
+          relationType: "derives",
+          confidence: similarity * 0.8,
+        });
+        seenTargets.add(existing.id);
       }
     }
   }
@@ -275,6 +349,7 @@ export async function processNewMemory(
     containerTag?: string;
     categoryOverride?: MemoryCategory;
     importanceOverride?: number;
+    isStatic?: boolean;
     createdAt?: number;
     updatedAt?: number;
     referenceTimeMs?: number;
@@ -311,6 +386,7 @@ export async function processNewMemory(
     category: options?.categoryOverride ?? info.category,
     containerTag: options?.containerTag,
     expiresAt: info.expiresAt,
+    isStatic: options?.isStatic,
     createdAt: options?.createdAt,
     updatedAt: options?.updatedAt,
   });
@@ -323,8 +399,22 @@ export async function processNewMemory(
 
   // Detect and record relationships
   const relationships = await detectRelationships(memory, db, embeddings);
+  let parentMemoryId: string | null = null;
   for (const rel of relationships) {
     db.addRelationship(memory.id, rel.targetId, rel.relationType, rel.confidence);
+    // Track the first "updates" target as the parent for version chaining
+    if (rel.relationType === "updates" && !parentMemoryId) {
+      parentMemoryId = rel.targetId;
+    }
+  }
+
+  // Set parent_memory_id for version chaining if an update was detected
+  if (parentMemoryId) {
+    try {
+      db.setParentMemoryId(memory.id, parentMemoryId);
+    } catch {
+      // non-critical — version chain is advisory
+    }
   }
 
   return memory;

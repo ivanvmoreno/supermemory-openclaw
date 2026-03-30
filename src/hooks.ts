@@ -1,15 +1,37 @@
 import type { SupermemoryConfig } from "./config.ts";
 import type { MemoryDB } from "./db.ts";
 import type { EmbeddingProvider } from "./embeddings.ts";
+import { extractFacts } from "./fact-extractor.ts";
 import { processNewMemory } from "./graph-engine.ts";
 import { formatProfileForPrompt, getOrBuildProfile } from "./profile-builder.ts";
 import {
   isSyntheticMemoryText,
   normalizeMemoryText,
-  prepareMemoryTextForStorage,
   sanitizeMemoryTextForPrompt,
+  stripInjectedMemoryContext,
 } from "./memory-text.ts";
 import { hybridSearch } from "./search.ts";
+
+export type SubagentRuntime = {
+  run: (params: {
+    sessionKey: string;
+    message: string;
+    extraSystemPrompt?: string;
+    deliver?: boolean;
+  }) => Promise<{ runId: string }>;
+  waitForRun: (params: {
+    runId: string;
+    timeoutMs?: number;
+  }) => Promise<{ status: string; error?: string }>;
+  getSessionMessages: (params: {
+    sessionKey: string;
+    limit?: number;
+  }) => Promise<{ messages: unknown[] }>;
+  deleteSession: (params: {
+    sessionKey: string;
+    deleteTranscript?: boolean;
+  }) => Promise<void>;
+};
 
 // ---------------------------------------------------------------------------
 // Types (matching OpenClaw lifecycle event shapes)
@@ -21,43 +43,6 @@ type Logger = {
 };
 
 const SKIPPED_PROVIDERS = new Set(["exec-event", "cron-event", "heartbeat"]);
-
-// ---------------------------------------------------------------------------
-// Capture filtering
-// ---------------------------------------------------------------------------
-
-const PROMPT_INJECTION_PATTERNS = [
-  /ignore (all|any|previous|above|prior) instructions/i,
-  /do not follow (the )?(system|developer)/i,
-  /system prompt/i,
-  /<\s*(system|assistant|developer|tool|function|relevant-memories)\b/i,
-  /Read HEARTBEAT\.md if it exists/i,
-  /\bHEARTBEAT_OK\b/i,
-  /##\s*Memory \(Supermemory Graph\)/i,
-];
-
-const CAPTURE_TRIGGERS = [
-  /remember|don't forget|keep in mind/i,
-  /prefer|like|love|hate|dislike|want|need/i,
-  /decided|will use|going with|chose|switched/i,
-  /\+\d{10,}/,
-  /[\w.-]+@[\w.-]+\.\w+/,
-  /my\s+\w+\s+is|is\s+my/i,
-  /i (like|prefer|hate|love|want|need|always|never)/i,
-  /important|critical|always|never/i,
-  /working on|building|developing|fixing/i,
-  /\b(?:the user|you) (?:prefer|like|want|need|use|mentioned|said)/i,
-  /\b(?:we|you) decided|agreed|settled on/i,
-  /\b(?:project|repo|stack|framework|language|tool)\b.{0,30}\b(?:is|uses?|built with)/i,
-  /\b(?:name|email|phone|role|team|company|location)\b.{0,20}\b(?:is|are)\b/i,
-  /\b(?:deadline|meeting|sprint|release|deploy|launch)\b/i,
-];
-
-export function shouldCapture(text: string, maxChars: number): boolean {
-  if (text.length < 10 || text.length > maxChars) return false;
-  if (PROMPT_INJECTION_PATTERNS.some((p) => p.test(text))) return false;
-  return CAPTURE_TRIGGERS.some((r) => r.test(text));
-}
 
 function getLastTurn(messages: unknown[]): unknown[] {
   let lastUserIdx = -1;
@@ -179,12 +164,14 @@ export function createAutoCaptureHook(
   embeddings: EmbeddingProvider,
   cfg: SupermemoryConfig,
   log: Logger,
+  subagent?: SubagentRuntime | null,
 ) {
   return async (
     event: { success?: boolean; messages?: unknown[] },
     ctx?: { messageProvider?: unknown },
   ) => {
-    if (!cfg.autoCapture) return;
+    if (!cfg.autoCapture || cfg.captureMode === "off") return;
+    if (!subagent) return;
     if (!event.success || !event.messages || event.messages.length === 0) return;
 
     const provider =
@@ -192,42 +179,43 @@ export function createAutoCaptureHook(
     if (provider && SKIPPED_PROVIDERS.has(provider)) return;
 
     try {
-      const texts: string[] = [];
-      for (const msg of getLastTurn(event.messages)) {
+      const lastTurn = getLastTurn(event.messages);
+
+      const turnParts: string[] = [];
+      for (const msg of lastTurn) {
         if (!msg || typeof msg !== "object") continue;
         const msgObj = msg as Record<string, unknown>;
+        const role = msgObj.role;
+        if (role !== "user" && role !== "assistant") continue;
 
-        if (msgObj.role !== "user" && msgObj.role !== "assistant") continue;
+        const parts = extractTextBlocks(msgObj.content)
+          .map((t) => stripInjectedMemoryContext(t))
+          .filter((t) => t.length >= 10);
 
-        texts.push(...extractTextBlocks(msgObj.content));
+        if (parts.length > 0) {
+          turnParts.push(`[role: ${role}]\n${parts.join("\n")}\n[${role}:end]`);
+        }
       }
 
-      const toCapture = texts
-        .map((text) => prepareMemoryTextForStorage(text, cfg.captureMaxChars))
-        .filter((text): text is string => !!text)
-        .filter((text) => shouldCapture(text, cfg.captureMaxChars))
-        .filter(dedupeCaptureCandidates);
+      if (turnParts.length === 0) return;
 
-      if (cfg.debug && texts.length > 0 && toCapture.length === 0) {
-        log.info(
-          `memory-supermemory: auto-capture skipped ${texts.length} text(s) — no capture triggers matched`,
-        );
-      }
-
-      if (toCapture.length === 0) return;
+      const turnText = turnParts.join("\n\n");
+      const facts = await extractFacts(turnText, subagent, log);
 
       let stored = 0;
-      for (const text of toCapture.slice(0, 3)) {
+      for (const fact of facts.slice(0, 10)) {
         try {
-          await processNewMemory(text, db, embeddings);
+          await processNewMemory(fact, db, embeddings);
           stored++;
         } catch (err) {
-          log.warn(`memory-supermemory: failed to capture memory: ${String(err)}`);
+          log.warn(`memory-supermemory: failed to store extracted fact: ${String(err)}`);
         }
       }
 
       if (stored > 0) {
-        log.info(`memory-supermemory: auto-captured ${stored} memories`);
+        log.info(`memory-supermemory: auto-captured ${stored} facts`);
+      } else if (cfg.debug && facts.length === 0) {
+        log.info("memory-supermemory: LLM extraction returned no facts for this turn");
       }
     } catch (err) {
       log.warn(`memory-supermemory: auto-capture failed: ${String(err)}`);
@@ -241,12 +229,6 @@ export function createAutoCaptureHook(
 
 function escapeForContext(text: string): string {
   return sanitizeMemoryTextForPrompt(text, 200);
-}
-
-function dedupeCaptureCandidates(value: string, index: number, values: string[]): boolean {
-  const key = normalizeMemoryText(value);
-  if (!key) return false;
-  return values.findIndex((candidate) => normalizeMemoryText(candidate) === key) === index;
 }
 
 function dedupeSearchResults<
