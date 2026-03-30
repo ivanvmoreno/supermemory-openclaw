@@ -290,4 +290,4 @@ What the runner does:
 3. Copies auth and model metadata from `LONGMEMEVAL_SOURCE_STATE_DIR` (default: `~/.openclaw`)
 4. Imports each benchmark instance into a fresh plugin DB
 5. Asks the benchmark question through `openclaw agent --local`
-6. Writes compatible `predictions.jsonl` plus a local summary JSON
+6. Writes a `predictions.jsonl` file plus a run summary JSON

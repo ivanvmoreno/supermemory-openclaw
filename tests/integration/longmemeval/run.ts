@@ -94,7 +94,6 @@ type RunResult = {
   imported_memories: number;
   prompt_tokens?: number;
   completion_tokens?: number;
-  approx_correct: boolean;
 };
 
 const FALLBACK_QA_MODEL = "openai/gpt-4o";
@@ -174,7 +173,6 @@ async function main(): Promise<void> {
       imported_memories,
       prompt_tokens: response.meta.agentMeta?.usage?.input,
       completion_tokens: response.meta.agentMeta?.usage?.output,
-      approx_correct: approximateCorrect(entry, hypothesis),
     });
   }
 
@@ -192,7 +190,6 @@ async function main(): Promise<void> {
       question: result.question,
       answer: result.answer,
       question_date: result.question_date,
-      approx_correct: result.approx_correct,
       imported_memories: result.imported_memories,
       prompt_tokens: result.prompt_tokens,
       completion_tokens: result.completion_tokens,
@@ -240,7 +237,6 @@ async function main(): Promise<void> {
     profile: options.profile,
     profileKept: options.keepProfile,
     total: summary.total,
-    approxAccuracy: summary.approxAccuracy,
     byType: summary.byType,
     officialEval,
   }, null, 2));
@@ -304,6 +300,9 @@ Environment:
   The only supported env defaults are:
   ${RUNNER_ENV.sourceStateDir}
   ${RUNNER_ENV.officialRepo}
+
+Notes:
+  No repo-local correctness heuristic is computed. Use --run-official-eval for LongMemEval scoring.
 
 Examples:
   bun run test:integration:longmemeval
@@ -687,73 +686,26 @@ function buildQuestionPrompt(entry: LongMemEvalEntry): string {
   ].join("\n\n");
 }
 
-function approximateCorrect(entry: LongMemEvalEntry, hypothesis: string): boolean {
-  if (entry.question_id.endsWith("_abs")) {
-    return /\b(i do not know|i don't know|unknown|not enough information|cannot determine|unanswerable)\b/i.test(
-      hypothesis,
-    );
-  }
-
-  const normalizedAnswer = normalizeForMatch(entry.answer);
-  const normalizedHypothesis = normalizeForMatch(hypothesis);
-  if (!normalizedAnswer || !normalizedHypothesis) return false;
-
-  if (normalizedHypothesis.includes(normalizedAnswer)) return true;
-  if (normalizedAnswer.length > 24 && normalizedAnswer.includes(normalizedHypothesis)) {
-    return true;
-  }
-
-  const answerTokens = contentTokens(normalizedAnswer);
-  if (answerTokens.length === 0) return false;
-  const hypothesisTokenSet = new Set(contentTokens(normalizedHypothesis));
-  const matched = answerTokens.filter((token) => hypothesisTokenSet.has(token)).length;
-  return matched / answerTokens.length >= 0.8;
-}
-
-function normalizeForMatch(value: string | number): string {
-  return String(value)
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .replace(/\b(a|an|the)\b/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function contentTokens(text: string): string[] {
-  return text.split(" ").filter((token) => token.length > 2);
-}
-
 function summarizeResults(results: RunResult[], options: ResolvedOptions): {
   preset: EvalPreset;
   total: number;
-  approxCorrect: number;
-  approxAccuracy: number;
-  byType: Record<string, { total: number; approxCorrect: number; approxAccuracy: number }>;
+  byType: Record<string, { total: number }>;
 } {
-  const byType = new Map<string, { total: number; approxCorrect: number }>();
+  const byType = new Map<string, { total: number }>();
 
   for (const result of results) {
-    const bucket = byType.get(result.question_type) ?? { total: 0, approxCorrect: 0 };
+    const bucket = byType.get(result.question_type) ?? { total: 0 };
     bucket.total += 1;
-    bucket.approxCorrect += result.approx_correct ? 1 : 0;
     byType.set(result.question_type, bucket);
   }
 
-  const approxCorrect = results.filter((result) => result.approx_correct).length;
   return {
     preset: options.preset,
     total: results.length,
-    approxCorrect,
-    approxAccuracy: results.length > 0 ? approxCorrect / results.length : 0,
     byType: Object.fromEntries(
       [...byType.entries()].map(([questionType, stats]) => [
         questionType,
-        {
-          total: stats.total,
-          approxCorrect: stats.approxCorrect,
-          approxAccuracy: stats.total > 0 ? stats.approxCorrect / stats.total : 0,
-        },
+        { total: stats.total },
       ]),
     ),
   };
