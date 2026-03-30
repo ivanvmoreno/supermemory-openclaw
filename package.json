@@ -9,6 +9,11 @@
     "type": "git",
     "url": "https://github.com/ivanvmoreno/supermemory-openclaw.git"
   },
+  "files": [
+    "index.ts",
+    "src/",
+    "openclaw.plugin.json"
+  ],
   "keywords": [
     "openclaw",
     "openclaw-plugin",
