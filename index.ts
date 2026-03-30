@@ -5,7 +5,6 @@ import { MemoryDB } from "./src/db.ts"
 import { createEmbeddingProvider } from "./src/embeddings.ts"
 import { ForgettingService } from "./src/forgetting.ts"
 import { createAutoCaptureHook, createAutoRecallHook } from "./src/hooks.ts"
-import { formatProfileForPrompt, getOrBuildProfile } from "./src/profile-builder.ts"
 import {
   createMemoryForgetTool,
   createMemoryProfileTool,
@@ -39,7 +38,7 @@ export default {
     )
 
     // ====================================================================
-    // Memory prompt section — injects user profile + recall guidance
+    // Memory prompt section — tool usage guidance
     // ====================================================================
 
     api.registerMemoryPromptSection(({ availableTools }) => {
@@ -49,19 +48,7 @@ export default {
 
       if (!hasSearch && !hasStore && !hasProfile) return []
 
-      const lines: string[] = ["## Memory (Supermemory Graph)"]
-
-      // Inject user profile into system prompt
-      try {
-        const profile = getOrBuildProfile(db, cfg, state.interactionCount)
-        const profileText = formatProfileForPrompt(profile)
-        if (profileText.length > 0) {
-          lines.push(profileText)
-          lines.push("")
-        }
-      } catch {
-        // Profile unavailable — skip silently
-      }
+      const lines: string[] = ["<supermemory-guidance>", "## Memory (Supermemory Graph)"]
 
       if (hasSearch) {
         lines.push(
@@ -78,6 +65,7 @@ export default {
         )
       }
 
+      lines.push("</supermemory-guidance>")
       lines.push("")
       return lines
     })

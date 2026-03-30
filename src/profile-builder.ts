@@ -1,5 +1,11 @@
 import type { SupermemoryConfig } from "./config.ts";
 import type { MemoryDB } from "./db.ts";
+import {
+  dedupeMemoryTexts,
+  normalizeMemoryText,
+  sanitizeMemoryTextForPrompt,
+  isSyntheticMemoryText,
+} from "./memory-text.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -21,28 +27,40 @@ const DYNAMIC_CATEGORIES = new Set(["decision", "project", "other"]);
 const MAX_STATIC_ITEMS = 20;
 const MAX_DYNAMIC_ITEMS = 10;
 const DYNAMIC_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const PROFILE_SCAN_LIMIT = 1000;
 
 export function buildUserProfile(db: MemoryDB, _cfg: SupermemoryConfig): UserProfile {
   const now = Date.now();
 
   // Static profile: high-importance, long-lived facts
-  const allActive = db.listActiveMemories(200);
+  const allActive = db.listActiveMemories(PROFILE_SCAN_LIMIT);
 
   const staticItems: string[] = [];
   const dynamicItems: string[] = [];
+  const seen = new Set<string>();
 
   for (const memory of allActive) {
+    if (isSyntheticMemoryText(memory.text)) continue;
+    const normalized = normalizeMemoryText(memory.text);
+    if (!normalized || seen.has(normalized)) continue;
+
+    const displayText = sanitizeMemoryTextForPrompt(memory.text, 200);
+    if (!displayText) continue;
+
     const isRecent = now - memory.created_at < DYNAMIC_WINDOW_MS;
 
     if (STATIC_CATEGORIES.has(memory.category) && memory.importance >= 0.5) {
       if (staticItems.length < MAX_STATIC_ITEMS) {
-        staticItems.push(memory.text);
+        staticItems.push(displayText);
+        seen.add(normalized);
+        continue;
       }
     }
 
     if (isRecent && (DYNAMIC_CATEGORIES.has(memory.category) || memory.access_count > 0)) {
       if (dynamicItems.length < MAX_DYNAMIC_ITEMS) {
-        dynamicItems.push(memory.text);
+        dynamicItems.push(displayText);
+        seen.add(normalized);
       }
     }
   }
@@ -60,9 +78,16 @@ export function getCachedProfile(db: MemoryDB): UserProfile | null {
 
   if (!staticCache || !dynamicCache) return null;
 
+  const staticItems = dedupeMemoryTexts(JSON.parse(staticCache.content) as string[])
+    .map((item) => sanitizeMemoryTextForPrompt(item, 200))
+    .filter(Boolean);
+  const dynamicItems = dedupeMemoryTexts(JSON.parse(dynamicCache.content) as string[])
+    .map((item) => sanitizeMemoryTextForPrompt(item, 200))
+    .filter(Boolean);
+
   return {
-    static: JSON.parse(staticCache.content) as string[],
-    dynamic: JSON.parse(dynamicCache.content) as string[],
+    static: staticItems,
+    dynamic: dynamicItems,
     updatedAt: Math.max(staticCache.updated_at, dynamicCache.updated_at),
   };
 }
@@ -100,29 +125,29 @@ export function getOrBuildProfile(
 // ---------------------------------------------------------------------------
 
 export function formatProfileForPrompt(profile: UserProfile): string {
+  const staticItems = dedupeMemoryTexts(profile.static)
+    .map((item) => sanitizeMemoryTextForPrompt(item, 200))
+    .filter(Boolean);
+  const dynamicItems = dedupeMemoryTexts(profile.dynamic)
+    .map((item) => sanitizeMemoryTextForPrompt(item, 200))
+    .filter(Boolean);
+
   const lines: string[] = [];
 
-  if (profile.static.length > 0) {
+  if (staticItems.length > 0) {
     lines.push("## User Profile (Long-term)");
-    for (const item of profile.static) {
-      lines.push(`- ${escapeForPrompt(item)}`);
+    for (const item of staticItems) {
+      lines.push(`- ${item}`);
     }
   }
 
-  if (profile.dynamic.length > 0) {
+  if (dynamicItems.length > 0) {
     lines.push("");
     lines.push("## Recent Context");
-    for (const item of profile.dynamic) {
-      lines.push(`- ${escapeForPrompt(item)}`);
+    for (const item of dynamicItems) {
+      lines.push(`- ${item}`);
     }
   }
 
   return lines.join("\n");
-}
-
-function escapeForPrompt(text: string): string {
-  return text
-    .replace(/[<>]/g, "")
-    .replace(/\n/g, " ")
-    .slice(0, 200);
 }

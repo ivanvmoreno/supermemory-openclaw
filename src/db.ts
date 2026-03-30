@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { MemoryCategory, RelationType, SupermemoryConfig } from "./config.ts";
@@ -61,9 +62,11 @@ function ensureDir(dirPath: string): void {
   }
 }
 
+const esmRequire = createRequire(import.meta.url);
+
 function requireNodeSqlite(): typeof import("node:sqlite") {
   try {
-    return require("node:sqlite");
+    return esmRequire("node:sqlite");
   } catch {
     throw new Error("node:sqlite is not available in this Node.js build");
   }
@@ -235,9 +238,12 @@ export class MemoryDB {
     category?: MemoryCategory;
     containerTag?: string;
     expiresAt?: number | null;
+    createdAt?: number;
+    updatedAt?: number;
   }): MemoryRow {
     const id = randomUUID();
-    const now = Date.now();
+    const createdAt = params.createdAt ?? Date.now();
+    const updatedAt = params.updatedAt ?? createdAt;
     const importance = params.importance ?? 0.5;
     const category = params.category ?? "other";
     const containerTag = params.containerTag ?? "default";
@@ -249,7 +255,17 @@ export class MemoryDB {
          created_at, updated_at, expires_at, is_superseded, access_count, last_accessed_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, NULL)`,
       )
-      .run(id, params.text, vectorBlob, importance, category, containerTag, now, now, params.expiresAt ?? null);
+      .run(
+        id,
+        params.text,
+        vectorBlob,
+        importance,
+        category,
+        containerTag,
+        createdAt,
+        updatedAt,
+        params.expiresAt ?? null,
+      );
 
     if (this.vecAvailable && params.vector) {
       this.db
@@ -264,8 +280,8 @@ export class MemoryDB {
       importance,
       category,
       container_tag: containerTag,
-      created_at: now,
-      updated_at: now,
+      created_at: createdAt,
+      updated_at: updatedAt,
       expires_at: params.expiresAt ?? null,
       is_superseded: false,
       access_count: 0,
@@ -277,6 +293,32 @@ export class MemoryDB {
     const row = this.db.prepare("SELECT * FROM memories WHERE id = ?").get(id) as
       | Record<string, unknown>
       | undefined;
+    if (!row) return null;
+    return this.rowToMemory(row);
+  }
+
+  findExactMemory(text: string, containerTag?: string): MemoryRow | null {
+    const row = containerTag
+      ? (this.db
+          .prepare(
+            `SELECT * FROM memories
+             WHERE is_superseded = 0
+               AND container_tag = ?
+               AND lower(trim(text)) = lower(trim(?))
+             ORDER BY created_at DESC
+             LIMIT 1`,
+          )
+          .get(containerTag, text) as Record<string, unknown> | undefined)
+      : (this.db
+          .prepare(
+            `SELECT * FROM memories
+             WHERE is_superseded = 0
+               AND lower(trim(text)) = lower(trim(?))
+             ORDER BY created_at DESC
+             LIMIT 1`,
+          )
+          .get(text) as Record<string, unknown> | undefined);
+
     if (!row) return null;
     return this.rowToMemory(row);
   }

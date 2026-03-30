@@ -1,5 +1,8 @@
 node_modules/
+.tmp/
 dist/
+.env
+.env.local
 *.js
 *.d.ts
 *.map

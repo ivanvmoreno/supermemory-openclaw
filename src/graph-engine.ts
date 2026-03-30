@@ -167,11 +167,10 @@ export function detectImportance(text: string, category: MemoryCategory): number
 // Temporal expiration detection
 // ---------------------------------------------------------------------------
 
-export function detectExpiration(text: string): number | null {
-  const now = Date.now();
+export function detectExpiration(text: string, referenceTimeMs = Date.now()): number | null {
   for (const { pattern, offsetMs } of TEMPORAL_PATTERNS) {
     if (pattern.test(text)) {
-      return now + offsetMs;
+      return referenceTimeMs + offsetMs;
     }
   }
   return null;
@@ -181,11 +180,14 @@ export function detectExpiration(text: string): number | null {
 // Full extraction pipeline
 // ---------------------------------------------------------------------------
 
-export function extractMemoryInfo(text: string): ExtractedMemoryInfo {
+export function extractMemoryInfo(
+  text: string,
+  options?: { referenceTimeMs?: number },
+): ExtractedMemoryInfo {
   const entities = extractEntities(text);
   const category = detectCategory(text);
   const importance = detectImportance(text, category);
-  const expiresAt = detectExpiration(text);
+  const expiresAt = detectExpiration(text, options?.referenceTimeMs);
 
   return { category, importance, entities, expiresAt };
 }
@@ -273,9 +275,20 @@ export async function processNewMemory(
     containerTag?: string;
     categoryOverride?: MemoryCategory;
     importanceOverride?: number;
+    createdAt?: number;
+    updatedAt?: number;
+    referenceTimeMs?: number;
   },
 ): Promise<MemoryRow> {
-  const info = extractMemoryInfo(text);
+  const exactDuplicate = db.findExactMemory(text, options?.containerTag ?? "default");
+  if (exactDuplicate) {
+    db.bumpAccessCount(exactDuplicate.id);
+    return exactDuplicate;
+  }
+
+  const info = extractMemoryInfo(text, {
+    referenceTimeMs: options?.referenceTimeMs ?? options?.createdAt,
+  });
 
   // Embed
   const vector = await embeddings.embed(text);
@@ -298,6 +311,8 @@ export async function processNewMemory(
     category: options?.categoryOverride ?? info.category,
     containerTag: options?.containerTag,
     expiresAt: info.expiresAt,
+    createdAt: options?.createdAt,
+    updatedAt: options?.updatedAt,
   });
 
   // Link entities

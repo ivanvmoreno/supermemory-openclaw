@@ -8,9 +8,9 @@ Local graph-based memory plugin for [OpenClaw](https://github.com/nichochar/open
 - **User Profiles** — Static long-term facts + dynamic recent context, automatically maintained and injected into system prompt
 - **Automatic Forgetting** — Temporal expiration for time-bound facts, decay for low-importance unused memories, contradiction resolution
 - **Hybrid Search** — BM25 keyword (FTS5) + graph-augmented multi-hop retrieval with MMR diversity re-ranking. Vector similarity (sqlite-vec) used when available.
-- **Auto-Recall** — Injects relevant memories + user profile before every AI turn
-- **Auto-Capture** — Extracts and stores important information from conversations automatically
-- **Fully Local** — SQLite storage, zero cloud dependencies (cloud embeddings optional)
+- **Auto-Recall** — Injects relevant memories + user profile before every AI turn.
+- **OpenClaw Runtime Integration** — Registers memory tools, a built-in memory search manager, and a pre-compaction memory flush plan when the host API supports them.
+- **Fully Local** — SQLite storage, no external dependencies (cloud embeddings optional).
 
 ## Quick Start
 
@@ -142,6 +142,7 @@ For other models, set `embedding.dimensions` explicitly.
 
 1. **You talk to your AI normally.** Share preferences, mention projects, discuss problems.
 2. **Auto-capture** extracts important facts from your messages — preferences, decisions, entities, project context.
+   It only considers the last real user turn and strips any memory/profile blocks that were injected into prompt context.
 3. **Graph engine** links memories via entities and detects relationships:
    - **Updates** — "I moved to SF" supersedes "I live in NYC"
    - **Extends** — "I lead a team of 5" enriches "I'm a PM at Stripe"
@@ -186,57 +187,17 @@ openclaw supermemory search "your topic"
 openclaw supermemory profile
 ```
 
-You can also query the SQLite database directly:
-
-```bash
-sqlite3 ~/.openclaw/memory/supermemory.db
-
-# Recent memories
-SELECT category, substr(text, 1, 80), datetime(created_at/1000, 'unixepoch')
-FROM memories ORDER BY created_at DESC LIMIT 10;
-
-# Extracted entities
-SELECT name, type FROM entities;
-```
-
 ## Vector Search
 
 The plugin uses FTS5 keyword search + graph traversal by default. Vector similarity search requires `sqlite-vec`, which is bundled with OpenClaw's built-in memory system but not automatically available to external plugins.
-
-**`Vector search: unavailable` is normal** — the plugin works well without it. FTS5 keyword matching + graph-augmented retrieval provide good recall for most use cases.
 
 If your OpenClaw build includes `sqlite-vec`, the plugin will detect and use it automatically.
 
 ## Troubleshooting
 
-### "plugin already exists" on install
-
-Delete the old install first:
-
-```bash
-rm -rf ~/.openclaw/extensions/openclaw-memory-supermemory
-openclaw plugins install openclaw-memory-supermemory
-```
-
-### "memory slot plugin not found"
-
-You have `plugins.slots.memory` pointing to a plugin that isn't installed. Either reinstall the plugin or remove the slot:
-
-```json5
-// Remove this line from ~/.openclaw/openclaw.json to revert to default memory:
-slots: { memory: "openclaw-memory-supermemory" }
-```
-
-### Plugin loads but no memories are captured
-
-1. Make sure `slots.memory` is set (not just `entries`)
-2. Enable debug logging: set `debug: true` in the plugin config
-3. Check OpenClaw logs for `memory-supermemory:` messages
-4. Verify embedding connectivity — the AI needs to be able to embed text. Try `openclaw supermemory search "test"` and check for errors.
-
 ### "plugins.allow is empty" warning
 
-Not an error — just a security reminder. Suppress it by adding:
+Suppress it by adding:
 
 ```json5
 plugins: {
@@ -256,7 +217,7 @@ plugins: {
 | `autoCapture` | boolean | `true` | Auto-capture memories from conversations |
 | `autoRecall` | boolean | `true` | Auto-inject memories + profile into context |
 | `profileFrequency` | number | `50` | Rebuild user profile every N interactions |
-| `entityExtraction` | string | `"pattern"` | `"pattern"` (fast regex) or `"llm"` |
+| `entityExtraction` | string | `"pattern"` | Current implementation is pattern-based. `"llm"` is reserved and currently behaves the same as `"pattern"`. |
 | `forgetExpiredIntervalMinutes` | number | `60` | Minutes between forgetting cleanup runs |
 | `temporalDecayDays` | number | `90` | Days before low-importance unused memories decay |
 | `maxRecallResults` | number | `10` | Max memories injected per auto-recall |
@@ -273,16 +234,23 @@ plugins: {
 openclaw-memory-supermemory/
 ├── index.ts                    # Plugin entry
 ├── openclaw.plugin.json        # Plugin manifest (kind: "memory")
+├── tests/
+│   └── integration/
+│       └── longmemeval/
+│           ├── fixtures/       # Bundled LongMemEval test artifacts
+│           ├── README.md       # Test layout and artifact notes
+│           └── run.ts          # Local OpenClaw integration battery / benchmark runner
 ├── src/
 │   ├── config.ts               # Config parsing + defaults
 │   ├── db.ts                   # SQLite: memories, entities, relationships, profiles
 │   ├── embeddings.ts           # Ollama + OpenAI-compatible embedding providers
 │   ├── graph-engine.ts         # Entity extraction, relationship detection
+│   ├── memory-text.ts          # Injected/synthetic memory filtering and prompt-safe sanitization
 │   ├── search.ts               # Hybrid search (vector + FTS5 + graph)
 │   ├── profile-builder.ts      # Static + dynamic user profile
 │   ├── forgetting.ts           # Temporal decay, expiration, cleanup
 │   ├── tools.ts                # Agent tools (search, store, forget, profile)
-│   ├── hooks.ts                # Auto-recall + auto-capture hooks
+│   ├── hooks.ts                # Auto-recall + guarded auto-capture hooks
 │   └── cli.ts                  # CLI commands
 ```
 
@@ -298,39 +266,28 @@ All data stored in a single SQLite database:
 - **memories_fts** — FTS5 virtual table for keyword search
 - **memories_vec** — sqlite-vec virtual table for vector similarity (when available)
 
-## Publishing
+## LongMemEval Integration
 
-### First-time setup (bootstrap)
-
-npm Trusted Publishing requires the package to exist before you can configure it. For a brand-new package:
-
-1. Create a classic npm token (Automation type) at https://www.npmjs.com/settings/~/tokens
-2. Add it as a repository secret: **Settings → Secrets → `NPM_TOKEN`**
-3. Go to **Actions → "Bootstrap: First npm publish" → Run workflow**
-   - Set version (e.g. `0.1.0`), run with dry-run first to verify, then run for real
-4. After it succeeds, go to **npmjs.com → package settings → Trusted Publishers**
-   - Click **GitHub Actions**
-   - Set: repository owner, repository name, workflow filename: `release.yml`
-5. **Delete the `NPM_TOKEN` secret** — it's no longer needed
-6. Disable or delete the bootstrap workflow
-
-### Subsequent releases (automated)
-
-All releases after the bootstrap use **OIDC trusted publishing** — no tokens to manage:
+The repo includes a [LongMemEval](https://github.com/xiaowu0162/LongMemEval) runner that evaluates this plugin through a real local OpenClaw agent invocation while keeping benchmark state isolated from your normal `~/.openclaw` profile.
 
 ```bash
-# Tag a release
-git tag v0.2.0
-git push origin v0.2.0
+# One example per main LongMemEval category + one abstention case
+bun run test:integration:longmemeval
+
+# Run the whole bundled oracle fixture
+bun run test:integration:longmemeval --preset full
+
+# Run the official LongMemEval evaluator afterwards
+bun run test:integration:longmemeval --run-official-eval --official-repo /tmp/LongMemEval
 ```
 
-This triggers `release.yml` which:
-1. **Validates** — typechecks, lints, validates plugin manifest
-2. **Publishes to npm** — via OIDC trusted publishing (no secret needed)
-3. **Creates GitHub Release** — with zip archive and auto-generated release notes
+The runner auto-loads repo-root `.env.local` and `.env` before reading env defaults. Start from [.env.sample](/Users/ivan/repos/supermemory-openclaw/.env.sample). The only supported runner env defaults are `LONGMEMEVAL_SOURCE_STATE_DIR` and `LONGMEMEVAL_OFFICIAL_REPO`.
 
-### Required secrets
+What the runner does:
 
-| Secret | Purpose | When needed |
-|--------|---------|-------------|
-| `NPM_TOKEN` | Bootstrap first npm publish only | Delete after first publish |
+1. Uses the bundled oracle fixture by default, or a file passed via `--data-file`
+2. Creates an isolated `~/.openclaw-<profile>` profile
+3. Copies auth and model metadata from `LONGMEMEVAL_SOURCE_STATE_DIR` (default: `~/.openclaw`)
+4. Imports each benchmark instance into a fresh plugin DB
+5. Asks the benchmark question through `openclaw agent --local`
+6. Writes compatible `predictions.jsonl` plus a local summary JSON
