@@ -1,4 +1,4 @@
-# OpenClaw Memory (Supermemory Local)
+# 🧠 Supermemory OpenClaw Plugin
 
 Local graph-based memory plugin for [OpenClaw](https://github.com/nichochar/openclaw) — inspired by [Supermemory](https://supermemory.ai). Runs entirely on your machine with no cloud dependencies.
 
