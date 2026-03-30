@@ -12,6 +12,37 @@ Local graph-based memory plugin for [OpenClaw](https://github.com/nichochar/open
 - **Auto-Recall** — Injects relevant memories + user profile before every AI turn via the `before_prompt_build` hook.
 - **OpenClaw Runtime Integration** — Registers memory tools, a built-in memory search manager, and a pre-compaction memory flush plan when the host API supports them.
 
+## How It Works
+
+```mermaid
+flowchart TD
+    A[User message] --> C[Last conversation turn extracted]
+    C --> D[LLM Fact Extraction via subagent]
+    D --> E{Facts found?}
+    E -- Yes --> F[Each fact individually processed]
+    E -- No --> Z[Skip — nothing to store]
+    F --> G[Embed via configured provider]
+    G --> H[Dedup check — exact + vector similarity]
+    H --> I[Store in SQLite]
+    I --> J[Entity extraction — people, projects, tech, emails]
+    J --> K[Link entities to memory]
+    K --> L{Related memories share entities?}
+    L -- High similarity > 0.7 --> M[Updates — supersedes old fact]
+    L -- Medium + extension keywords --> N[Extends — enriches existing]
+    L -- Moderate 0.3–0.7 --> O[Derives — inferred connection]
+    L -- No match --> P[Standalone memory]
+    M --> Q[Mark old memory superseded + version chain]
+```
+
+1. **You talk to your AI normally.** Share preferences, mention projects, discuss problems.
+2. **Auto-capture** uses your configured LLM to extract discrete facts from the last conversation turn (both user and assistant messages).
+3. **Graph engine** links each extracted fact to entities and detects relationships:
+   - **Updates** — "I moved to SF" supersedes "I live in NYC"
+   - **Extends** — "I lead a team of 5" enriches "I'm a PM at Stripe"
+   - **Derives** — Inferred connections from shared entities
+4. **Auto-recall** injects your user profile + relevant memories before each AI turn.
+5. **Automatic forgetting** cleans up expired time-bound facts and decays unused low-importance memories.
+
 ## Quick Start
 
 ### Step 1: Install the plugin
@@ -138,16 +169,6 @@ embedding: {
 
 For other models, set `embedding.dimensions` explicitly.
 
-## How It Works
-
-1. **You talk to your AI normally.** Share preferences, mention projects, discuss problems.
-2. **Auto-capture** uses your configured LLM to extract discrete facts from the last conversation turn (both user and assistant messages).
-3. **Graph engine** links each extracted fact to entities and detects relationships:
-   - **Updates** — "I moved to SF" supersedes "I live in NYC"
-   - **Extends** — "I lead a team of 5" enriches "I'm a PM at Stripe"
-   - **Derives** — Inferred connections from shared entities
-4. **Auto-recall** injects your user profile + relevant memories before each AI turn.
-5. **Automatic forgetting** cleans up expired time-bound facts and decays unused low-importance memories.
 
 ## AI Tools
 
