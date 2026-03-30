@@ -76,10 +76,10 @@ export async function extractFacts(
       idempotencyKey,
     });
 
-    // Wait for completion (10s timeout — extraction should be fast)
+    // Wait for completion (30s timeout — local models may need warmup time)
     const result = await subagent.waitForRun({
       runId,
-      timeoutMs: 10_000,
+      timeoutMs: 30_000,
     });
 
     if (result.status !== "ok") {

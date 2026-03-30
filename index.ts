@@ -233,6 +233,12 @@ export default {
 
     if (cfg.autoCapture && cfg.captureMode !== "off") {
       const subagent = (api as unknown as { runtime?: { subagent?: unknown } }).runtime?.subagent ?? null;
+      if (!subagent) {
+        api.logger.warn(
+          "memory-supermemory: subagent runtime not available — auto-capture (LLM fact extraction) is disabled. " +
+          "The memory_store tool still works for manual capture.",
+        )
+      }
       api.on(
         "agent_end",
         createAutoCaptureHook(db, embeddings, cfg, api.logger, subagent as any),
