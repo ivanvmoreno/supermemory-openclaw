@@ -2,6 +2,8 @@
 
 Local graph-based memory plugin for [OpenClaw](https://github.com/nichochar/openclaw) — inspired by [Supermemory](https://supermemory.ai). Runs entirely on your machine with no cloud dependencies.
 
+> **Disclaimer:** This is an independent project. It is not affiliated with, endorsed by, or maintained by the Supermemory team. The name reflects architectural inspiration, not a partnership.
+
 ## Features
 
 - **LLM Fact Extraction** — Extracts discrete, entity-centric facts from each conversation turn via an LLM subagent, matching Supermemory's cloud approach locally.
