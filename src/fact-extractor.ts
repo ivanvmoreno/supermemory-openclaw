@@ -13,6 +13,7 @@ type SubagentRuntime = {
     message: string;
     extraSystemPrompt?: string;
     deliver?: boolean;
+    idempotencyKey?: string;
   }) => Promise<{ runId: string }>;
   waitForRun: (params: {
     runId: string;
@@ -66,11 +67,13 @@ export async function extractFacts(
     }
 
     // Run the extraction subagent
+    const idempotencyKey = `smex-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const { runId } = await subagent.run({
       sessionKey: EXTRACT_SESSION_KEY,
       message: turnText,
       extraSystemPrompt: EXTRACTION_SYSTEM_PROMPT,
       deliver: false,
+      idempotencyKey,
     });
 
     // Wait for completion (10s timeout — extraction should be fast)

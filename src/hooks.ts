@@ -18,6 +18,7 @@ export type SubagentRuntime = {
     message: string;
     extraSystemPrompt?: string;
     deliver?: boolean;
+    idempotencyKey?: string;
   }) => Promise<{ runId: string }>;
   waitForRun: (params: {
     runId: string;
