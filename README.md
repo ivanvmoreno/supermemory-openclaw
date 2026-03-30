@@ -37,8 +37,8 @@ flowchart TD
 1. **You talk to your AI normally.** Share preferences, mention projects, discuss problems.
 2. **Auto-capture** uses your configured LLM to extract discrete facts from the last conversation turn (both user and assistant messages).
 3. **Graph engine** links each extracted fact to entities and detects relationships:
-   - **Updates** — "I moved to SF" supersedes "I live in NYC"
-   - **Extends** — "I lead a team of 5" enriches "I'm a PM at Stripe"
+   - **Updates** — "Iván moved to Copenhagen" supersedes "Iván lives in Madrid"
+   - **Extends** — "Iván leads a research team of 4" enriches "Iván is an AI Scientist at Santander"
    - **Derives** — Inferred connections from shared entities
 4. **Auto-recall** injects your user profile + relevant memories before each AI turn.
 5. **Automatic forgetting** cleans up expired time-bound facts and decays unused low-importance memories.
@@ -254,12 +254,13 @@ plugins: {
 By default, the plugin uses your configured LLM to extract discrete, entity-centric facts from each conversation turn.
 
 **Input conversation:**
-> "Caught up with Iván Moreno today. He's working at Santander as an AI Scientist now, doing research on knowledge graphs. He's really into the graph-based memory space and mentioned a deadline next Tuesday for a paper submission."
+> "Caught up with Iván today. He's working at Santander as an AI Scientist now, doing research on knowledge graphs. He lives in Madrid and mentioned a deadline next Tuesday for a paper submission."
 
 **Extracted memories:**
-- Iván Moreno works at Santander as an AI Scientist
-- Iván Moreno researches knowledge graphs
-- Iván Moreno has a paper submission deadline next Tuesday
+- Iván works at Santander as an AI Scientist
+- Iván researches knowledge graphs
+- Iván lives in Madrid
+- Iván has a paper submission deadline next Tuesday
 
 Each fact is stored as a separate memory with automatic entity linking, relationship detection (Updates/Extends/Derives), and temporal expiration.
 
