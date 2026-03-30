@@ -17,23 +17,37 @@ Local graph-based memory plugin for [OpenClaw](https://github.com/nichochar/open
 ## How It Works
 
 ```mermaid
-flowchart TD
-    A[User message] --> C[Last conversation turn extracted]
-    C --> D[LLM Fact Extraction via subagent]
-    D --> E{Facts found?}
-    E -- Yes --> F[Each fact individually processed]
-    E -- No --> Z[Skip — nothing to store]
-    F --> G[Embed via configured provider]
-    G --> H[Dedup check — exact + vector similarity]
-    H --> I[Store in SQLite]
-    I --> J[Entity extraction — people, projects, tech, emails]
-    J --> K[Link entities to memory]
-    K --> L{Related memories share entities?}
-    L -- High similarity > 0.7 --> M[Updates — supersedes old fact]
-    L -- Medium + extension keywords --> N[Extends — enriches existing]
-    L -- Moderate 0.3–0.7 --> O[Derives — inferred connection]
-    L -- No match --> P[Standalone memory]
-    M --> Q[Mark old memory superseded + version chain]
+flowchart LR
+    subgraph input ["💬 Conversation"]
+        A[User message] --> B[AI response]
+    end
+
+    subgraph extract ["🧠 Memory Engine"]
+        C[Extract discrete facts via LLM]
+        C --> D[Deduplicate]
+        D --> E[Classify & embed]
+    end
+
+    subgraph graph ["🔗 Knowledge Graph"]
+        F["Link entities\n(people, projects)"]
+        F --> G{Relationship detection}
+        G --> H["🔄 Updates — new fact\nsupersedes old"]
+        G --> I["➕ Extends — enriches\nexisting fact"]
+        G --> J["🔮 Derives — inferred\nconnection"]
+    end
+
+    subgraph recall ["🔎 Recall"]
+        K["User Profile\n(static + dynamic facts)"]
+        L["Hybrid Search\n(vector + keyword + graph)"]
+        K --> M[Inject into next AI turn]
+        L --> M
+    end
+
+    B --> C
+    E --> F
+    J --> K
+    H --> K
+    I --> K
 ```
 
 1. **You talk to your AI normally.** Share preferences, mention projects, discuss problems.
