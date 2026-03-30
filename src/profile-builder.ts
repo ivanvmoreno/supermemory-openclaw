@@ -44,7 +44,7 @@ export function buildUserProfile(db: MemoryDB, _cfg: SupermemoryConfig): UserPro
     const normalized = normalizeMemoryText(memory.text);
     if (!normalized || seen.has(normalized)) continue;
 
-    const displayText = sanitizeMemoryTextForPrompt(memory.text, 200);
+    const displayText = sanitizeMemoryTextForPrompt(memory.text, 500);
     if (!displayText) continue;
 
     const isRecent = now - memory.created_at < DYNAMIC_WINDOW_MS;
@@ -79,10 +79,10 @@ export function getCachedProfile(db: MemoryDB): UserProfile | null {
   if (!staticCache || !dynamicCache) return null;
 
   const staticItems = dedupeMemoryTexts(JSON.parse(staticCache.content) as string[])
-    .map((item) => sanitizeMemoryTextForPrompt(item, 200))
+    .map((item) => sanitizeMemoryTextForPrompt(item, 500))
     .filter(Boolean);
   const dynamicItems = dedupeMemoryTexts(JSON.parse(dynamicCache.content) as string[])
-    .map((item) => sanitizeMemoryTextForPrompt(item, 200))
+    .map((item) => sanitizeMemoryTextForPrompt(item, 500))
     .filter(Boolean);
 
   return {
@@ -126,10 +126,10 @@ export function getOrBuildProfile(
 
 export function formatProfileForPrompt(profile: UserProfile): string {
   const staticItems = dedupeMemoryTexts(profile.static)
-    .map((item) => sanitizeMemoryTextForPrompt(item, 200))
+    .map((item) => sanitizeMemoryTextForPrompt(item, 500))
     .filter(Boolean);
   const dynamicItems = dedupeMemoryTexts(profile.dynamic)
-    .map((item) => sanitizeMemoryTextForPrompt(item, 200))
+    .map((item) => sanitizeMemoryTextForPrompt(item, 500))
     .filter(Boolean);
 
   const lines: string[] = [];

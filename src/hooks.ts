@@ -229,7 +229,7 @@ export function createAutoCaptureHook(
 // ---------------------------------------------------------------------------
 
 function escapeForContext(text: string): string {
-  return sanitizeMemoryTextForPrompt(text, 200);
+  return sanitizeMemoryTextForPrompt(text, 500);
 }
 
 function dedupeSearchResults<
