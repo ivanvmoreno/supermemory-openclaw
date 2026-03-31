@@ -13,7 +13,7 @@ jobs:
     name: Validate plugin
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Check required files exist
         run: |
@@ -62,18 +62,40 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          # npm recommends Node >=22.14.0 and npm >=11.5.1 for trusted publishing
-          node-version: "22"
+          node-version: "24"
+          check-latest: true
           registry-url: "https://registry.npmjs.org"
 
-      - name: Verify npm version supports trusted publishing
+      - name: Upgrade npm for trusted publishing
+        run: npm install --global npm@latest
+
+      - name: Verify release toolchain
         run: |
+          set -euo pipefail
           echo "node $(node -v)"
           echo "npm $(npm -v)"
+          node <<'EOF'
+          const [major, minor] = process.versions.node.split(".").map(Number);
+          if (major < 24 && !(major === 22 && minor >= 14)) {
+            console.error("npm trusted publishing requires Node 22.14.0 or newer.");
+            process.exit(1);
+          }
+          EOF
+          node -e '
+            const [major, minor, patch] = process.argv[1].split(".").map(Number);
+            const unsupported =
+              major < 11 ||
+              (major === 11 && minor < 5) ||
+              (major === 11 && minor === 5 && patch < 1);
+            if (unsupported) {
+              console.error("npm trusted publishing requires npm 11.5.1 or newer.");
+              process.exit(1);
+            }
+          ' "$(npm -v)"
 
       - name: Set version from tag
         run: |
@@ -81,13 +103,11 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           npm version "$VERSION" --no-git-tag-version --allow-same-version
 
+      - name: Check package contents
+        run: npm pack --dry-run
+
       - name: Publish to npm
-        # Uses OIDC trusted publishing — no NPM_TOKEN secret needed.
-        # The npm CLI detects the OIDC environment and authenticates automatically.
-        #
-        # PREREQUISITE: Trusted publisher must be configured on npmjs.com first.
-        # See .github/workflows/bootstrap-npm.yml for initial setup instructions.
-        run: npm publish --provenance --access public
+        run: npm publish
 
   github-release:
     name: Create GitHub Release
@@ -96,7 +116,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Build release archive
         run: |

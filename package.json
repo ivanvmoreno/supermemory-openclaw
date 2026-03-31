@@ -1,13 +1,20 @@
 {
   "name": "openclaw-memory-supermemory",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "type": "module",
   "description": "Local graph-based memory plugin for OpenClaw with entity extraction, user profiles, and automatic forgetting — inspired by Supermemory",
   "license": "MIT",
   "author": "",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ivanvmoreno/supermemory-openclaw.git"
+    "url": "git+https://github.com/ivanvmoreno/supermemory-openclaw.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ivanvmoreno/supermemory-openclaw/issues"
+  },
+  "homepage": "https://github.com/ivanvmoreno/supermemory-openclaw#readme",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
   },
   "files": [
     "index.ts",
