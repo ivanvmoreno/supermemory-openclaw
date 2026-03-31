@@ -104,7 +104,6 @@ export class MemoryDB {
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
     this.initSchema();
-    this.migrateSchema();
     this.tryLoadVec();
   }
 
@@ -125,6 +124,8 @@ export class MemoryDB {
         updated_at INTEGER NOT NULL,
         expires_at INTEGER,
         is_superseded INTEGER NOT NULL DEFAULT 0,
+        is_static INTEGER NOT NULL DEFAULT 0,
+        parent_memory_id TEXT,
         access_count INTEGER NOT NULL DEFAULT 0,
         last_accessed_at INTEGER
       );
@@ -208,18 +209,6 @@ export class MemoryDB {
           VALUES (new.rowid, new.id, new.text, new.category);
       END;
     `);
-  }
-
-  private migrateSchema(): void {
-    const safeAddColumn = (table: string, col: string, def: string) => {
-      try {
-        this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
-      } catch {
-        // column already exists
-      }
-    };
-    safeAddColumn("memories", "is_static", "INTEGER NOT NULL DEFAULT 0");
-    safeAddColumn("memories", "parent_memory_id", "TEXT");
   }
 
   private tryLoadVec(): void {
