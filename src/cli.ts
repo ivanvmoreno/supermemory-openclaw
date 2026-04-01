@@ -18,10 +18,13 @@ export function registerSupermemoryCli(
     .command("search")
     .description("Search memories")
     .argument("<query>", "Search query")
-    .option("--limit <n>", "Max results", "10")
+    .option("--limit <n>", "Max results", String(cfg.maxRecallResults))
     .action(async (query: unknown, opts: unknown) => {
       const q = query as string;
-      const limit = Number.parseInt((opts as Record<string, string>).limit ?? "10", 10);
+      const limit = Number.parseInt(
+        (opts as Record<string, string>).limit ?? String(cfg.maxRecallResults),
+        10,
+      );
       const results = await hybridSearch(q, db, embeddings, cfg, { maxResults: limit });
       if (results.length === 0) {
         console.log("No memories found.");
@@ -29,7 +32,7 @@ export function registerSupermemoryCli(
       }
       for (const r of results) {
         console.log(
-          `[${r.memory.id.slice(0, 8)}] ${(r.score * 100).toFixed(0)}% [${r.memory.category}] ${r.memory.text.slice(0, 120)}`,
+          `[${r.memory.id.slice(0, 8)}] ${(r.score * 100).toFixed(0)}% [${r.memory.memory_type}] ${r.memory.text.slice(0, 120)}`,
         );
       }
     });
@@ -42,20 +45,20 @@ export function registerSupermemoryCli(
       const rebuild = !!(opts as Record<string, boolean>).rebuild;
       const profile = rebuild ? buildUserProfile(db, cfg) : getOrBuildProfile(db, cfg, 0);
 
-      console.log("\n=== Static Profile (Long-term Facts) ===");
-      if (profile.static.length === 0) {
+      console.log("\n=== Long-Term Profile ===");
+      if (profile.longTerm.length === 0) {
         console.log("  (empty)");
       } else {
-        for (const item of profile.static) {
+        for (const item of profile.longTerm) {
           console.log(`  - ${item}`);
         }
       }
 
-      console.log("\n=== Dynamic Profile (Recent Context) ===");
-      if (profile.dynamic.length === 0) {
+      console.log("\n=== Recent Context ===");
+      if (profile.recent.length === 0) {
         console.log("  (empty)");
       } else {
-        for (const item of profile.dynamic) {
+        for (const item of profile.recent) {
           console.log(`  - ${item}`);
         }
       }

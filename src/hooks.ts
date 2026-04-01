@@ -1,7 +1,7 @@
 import type { SupermemoryConfig } from "./config.ts";
 import type { MemoryDB } from "./db.ts";
 import type { EmbeddingProvider } from "./embeddings.ts";
-import { extractFacts } from "./fact-extractor.ts";
+import { extractMemoryCandidates } from "./fact-extractor.ts";
 import { processNewMemory } from "./graph-engine.ts";
 import { formatProfileForPrompt, getOrBuildProfile } from "./profile-builder.ts";
 import {
@@ -10,29 +10,8 @@ import {
   sanitizeMemoryTextForPrompt,
   stripInjectedMemoryContext,
 } from "./memory-text.ts";
+import type { SemanticSubagentRuntime } from "./semantic-runtime.ts";
 import { hybridSearch } from "./search.ts";
-
-export type SubagentRuntime = {
-  run: (params: {
-    sessionKey: string;
-    message: string;
-    extraSystemPrompt?: string;
-    deliver?: boolean;
-    idempotencyKey?: string;
-  }) => Promise<{ runId: string }>;
-  waitForRun: (params: {
-    runId: string;
-    timeoutMs?: number;
-  }) => Promise<{ status: string; error?: string }>;
-  getSessionMessages: (params: {
-    sessionKey: string;
-    limit?: number;
-  }) => Promise<{ messages: unknown[] }>;
-  deleteSession: (params: {
-    sessionKey: string;
-    deleteTranscript?: boolean;
-  }) => Promise<void>;
-};
 
 // ---------------------------------------------------------------------------
 // Types (matching OpenClaw lifecycle event shapes)
@@ -44,6 +23,9 @@ type Logger = {
 };
 
 const SKIPPED_PROVIDERS = new Set(["exec-event", "cron-event", "heartbeat"]);
+const AUTO_RECALL_MAX_MEMORIES = 5;
+const AUTO_RECALL_MIN_SCORE = 0.3;
+const AUTO_CAPTURE_MIN_TEXT_BLOCK_CHARS = 10;
 
 function getLastTurn(messages: unknown[]): unknown[] {
   let lastUserIdx = -1;
@@ -107,12 +89,12 @@ export function createAutoRecallHook(
 
       // Build/refresh profile
       const profile = getOrBuildProfile(db, cfg, state.interactionCount);
-      const profileSection = formatProfileForPrompt(profile);
+      const profileSection = formatProfileForPrompt(profile, cfg);
 
       // Search for relevant memories
       const results = await hybridSearch(event.prompt, db, embeddings, cfg, {
-        maxResults: Math.min(cfg.maxRecallResults, 5),
-        minScore: 0.3,
+        maxResults: Math.min(cfg.maxRecallResults, AUTO_RECALL_MAX_MEMORIES),
+        minScore: AUTO_RECALL_MIN_SCORE,
       });
 
       const dedupedResults = dedupeSearchResults(results);
@@ -129,7 +111,7 @@ export function createAutoRecallHook(
         const memoriesText = dedupedResults
           .map(
             (r) =>
-              `- [${r.memory.category}] ${escapeForContext(r.memory.text)} (${(r.score * 100).toFixed(0)}%)`,
+              `- [${r.memory.memory_type}] ${escapeForContext(r.memory.text, cfg.promptMemoryMaxChars)} (${(r.score * 100).toFixed(0)}%)`,
           )
           .join("\n");
 
@@ -139,7 +121,7 @@ export function createAutoRecallHook(
       }
 
       log.info(
-        `memory-supermemory: injecting profile (${profile.static.length}s/${profile.dynamic.length}d) + ${dedupedResults.length} memories into context`,
+        `memory-supermemory: injecting profile (${profile.longTerm.length}lt/${profile.recent.length}r) + ${dedupedResults.length} memories into context`,
       );
 
       return {
@@ -165,7 +147,7 @@ export function createAutoCaptureHook(
   embeddings: EmbeddingProvider,
   cfg: SupermemoryConfig,
   log: Logger,
-  subagent?: SubagentRuntime | null,
+  subagent?: SemanticSubagentRuntime | null,
 ) {
   return async (
     event: { success?: boolean; messages?: unknown[] },
@@ -191,7 +173,7 @@ export function createAutoCaptureHook(
 
         const parts = extractTextBlocks(msgObj.content)
           .map((t) => stripInjectedMemoryContext(t))
-          .filter((t) => t.length >= 10);
+          .filter((t) => t.length >= AUTO_CAPTURE_MIN_TEXT_BLOCK_CHARS);
 
         if (parts.length > 0) {
           turnParts.push(`[role: ${role}]\n${parts.join("\n")}\n[${role}:end]`);
@@ -200,23 +182,31 @@ export function createAutoCaptureHook(
 
       if (turnParts.length === 0) return;
 
-      const turnText = turnParts.join("\n\n");
-      const facts = await extractFacts(turnText, subagent, log);
+      const turnText = turnParts.join("\n\n").slice(0, cfg.captureMaxChars);
+      const candidates = await extractMemoryCandidates(turnText, subagent, log, {
+        referenceTimeMs: Date.now(),
+      });
 
       let stored = 0;
-      for (const fact of facts.slice(0, 10)) {
+      for (const candidate of candidates) {
         try {
-          await processNewMemory(fact, db, embeddings);
-          stored++;
+          const memory = await processNewMemory(candidate.text, db, embeddings, {
+            semanticMemory: candidate,
+            semanticRuntime: subagent,
+            log,
+          });
+          if (memory) {
+            stored++;
+          }
         } catch (err) {
-          log.warn(`memory-supermemory: failed to store extracted fact: ${String(err)}`);
+          log.warn(`memory-supermemory: failed to store extracted memory: ${String(err)}`);
         }
       }
 
       if (stored > 0) {
-        log.info(`memory-supermemory: auto-captured ${stored} facts`);
-      } else if (cfg.debug && facts.length === 0) {
-        log.info("memory-supermemory: LLM extraction returned no facts for this turn");
+        log.info(`memory-supermemory: auto-captured ${stored} memories`);
+      } else if (cfg.debug && candidates.length === 0) {
+        log.info("memory-supermemory: LLM extraction returned no semantic memories for this turn");
       }
     } catch (err) {
       log.warn(`memory-supermemory: auto-capture failed: ${String(err)}`);
@@ -228,8 +218,8 @@ export function createAutoCaptureHook(
 // Helpers
 // ---------------------------------------------------------------------------
 
-function escapeForContext(text: string): string {
-  return sanitizeMemoryTextForPrompt(text, 500);
+function escapeForContext(text: string, maxChars: number): string {
+  return sanitizeMemoryTextForPrompt(text, maxChars);
 }
 
 function dedupeSearchResults<

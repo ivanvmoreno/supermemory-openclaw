@@ -115,6 +115,7 @@ const REPO_ROOT = resolve(
   "..",
   "..",
 );
+const PACKAGE_JSON_PATH = join(REPO_ROOT, "package.json");
 const BUNDLED_DATA_FILE = join(
   REPO_ROOT,
   "tests",
@@ -335,6 +336,16 @@ function loadRunnerEnvFiles(): void {
   }
 }
 
+async function readPackageVersion(): Promise<string> {
+  const raw = await readFile(PACKAGE_JSON_PATH, "utf8");
+  const parsed = JSON.parse(raw) as { version?: unknown };
+  if (typeof parsed.version === "string" && parsed.version.length > 0) {
+    return parsed.version;
+  }
+
+  throw new Error(`Missing package version in ${PACKAGE_JSON_PATH}`);
+}
+
 async function resolveOptions(cli: CliOptions): Promise<ResolvedOptions> {
   const sourceStateDir = resolveTilde(
     readEnvString(RUNNER_ENV.sourceStateDir) ?? FALLBACK_SOURCE_STATE_DIR,
@@ -463,6 +474,7 @@ async function prepareEvalProfile(
   options: ResolvedOptions,
   profileRoot: string,
 ): Promise<void> {
+  const packageVersion = await readPackageVersion();
   await rm(profileRoot, { recursive: true, force: true });
 
   const workspaceDir = join(profileRoot, "workspace");
@@ -527,7 +539,7 @@ async function prepareEvalProfile(
           source: "path",
           sourcePath: REPO_ROOT,
           installPath: REPO_ROOT,
-          version: "0.2.3",
+          version: packageVersion,
         },
       },
     },

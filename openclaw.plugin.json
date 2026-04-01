@@ -20,7 +20,11 @@
       "captureMode": { "type": "string", "enum": ["extract", "off"] },
       "autoRecall": { "type": "boolean" },
       "profileFrequency": { "type": "number", "minimum": 1, "maximum": 1000 },
-      "entityExtraction": { "type": "string", "enum": ["pattern", "llm"] },
+      "maxLongTermItems": { "type": "number", "minimum": 1 },
+      "maxRecentItems": { "type": "number", "minimum": 1 },
+      "recentWindowDays": { "type": "number", "minimum": 1 },
+      "profileScanLimit": { "type": "number", "minimum": 1 },
+      "promptMemoryMaxChars": { "type": "number", "minimum": 20 },
       "forgetExpiredIntervalMinutes": { "type": "number", "minimum": 1 },
       "temporalDecayDays": { "type": "number", "minimum": 1 },
       "maxRecallResults": { "type": "number", "minimum": 1, "maximum": 100 },
@@ -47,17 +51,17 @@
       "label": "API Key",
       "sensitive": true,
       "placeholder": "sk-...",
-      "help": "API key (only for cloud embedding providers)"
+      "help": "API key for cloud embedding providers"
     },
     "embedding.baseUrl": {
       "label": "Base URL",
       "placeholder": "http://localhost:11434/v1",
-      "help": "Custom base URL for embedding provider",
+      "help": "Custom API base URL for the embedding provider",
       "advanced": true
     },
     "embedding.dimensions": {
       "label": "Dimensions",
-      "help": "Vector dimensions (auto-detected for known models)",
+      "help": "Embedding dimensions when they cannot be auto-detected",
       "advanced": true
     },
     "autoCapture": {
@@ -66,15 +70,70 @@
     },
     "captureMode": {
       "label": "Capture Mode",
-      "help": "\"extract\" (LLM fact extraction, default) or \"off\" (disable auto-capture)"
+      "help": "\"extract\" uses the LLM extractor. \"off\" disables auto-capture."
     },
     "autoRecall": {
       "label": "Auto-Recall",
-      "help": "Automatically inject relevant memories and user profile into context"
+      "help": "Automatically inject relevant memories and the cached profile into prompts"
     },
-    "entityExtraction": {
-      "label": "Entity Extraction Mode",
-      "help": "\"pattern\" (fast, local regex) or \"llm\" (higher quality, uses configured LLM)",
+    "profileFrequency": {
+      "label": "Profile Rebuild Frequency",
+      "help": "Rebuild the cached profile every N interactions",
+      "advanced": true
+    },
+    "maxLongTermItems": {
+      "label": "Max Long-Term Items",
+      "help": "Maximum memories shown in the long-term profile section",
+      "advanced": true
+    },
+    "maxRecentItems": {
+      "label": "Max Recent Items",
+      "help": "Maximum memories shown in the recent profile section",
+      "advanced": true
+    },
+    "recentWindowDays": {
+      "label": "Recent Window Days",
+      "help": "How many days count as recent for episodic memories",
+      "advanced": true
+    },
+    "profileScanLimit": {
+      "label": "Profile Scan Limit",
+      "help": "Maximum active memories scanned when rebuilding the profile",
+      "advanced": true
+    },
+    "promptMemoryMaxChars": {
+      "label": "Prompt Memory Max Chars",
+      "help": "Maximum characters per memory when injecting profile or recall context",
+      "advanced": true
+    },
+    "forgetExpiredIntervalMinutes": {
+      "label": "Forgetting Interval",
+      "help": "Minutes between forgetting cleanup runs",
+      "advanced": true
+    },
+    "temporalDecayDays": {
+      "label": "Temporal Decay Days",
+      "help": "Days before stale unpinned episodic memories are removed",
+      "advanced": true
+    },
+    "maxRecallResults": {
+      "label": "Max Recall Results",
+      "help": "Default maximum results returned by memory search",
+      "advanced": true
+    },
+    "vectorWeight": {
+      "label": "Vector Weight",
+      "help": "Weight for vector similarity during hybrid search",
+      "advanced": true
+    },
+    "textWeight": {
+      "label": "Text Weight",
+      "help": "Weight for keyword search during hybrid search",
+      "advanced": true
+    },
+    "graphWeight": {
+      "label": "Graph Weight",
+      "help": "Weight for related-memory expansion during hybrid search",
       "advanced": true
     },
     "dbPath": {
@@ -82,9 +141,14 @@
       "placeholder": "~/.openclaw/memory/supermemory.db",
       "advanced": true
     },
+    "captureMaxChars": {
+      "label": "Capture Max Chars",
+      "help": "Maximum characters from the assembled turn sent to the extractor",
+      "advanced": true
+    },
     "debug": {
-      "label": "Debug Mode",
-      "help": "Enable verbose logging",
+      "label": "Debug Logging",
+      "help": "Enable extra memory-plugin logging",
       "advanced": true
     }
   }

@@ -1,152 +1,371 @@
-// ---------------------------------------------------------------------------
-// LLM-powered fact extraction via OpenClaw subagent
-// ---------------------------------------------------------------------------
+import type { MemoryType } from "./config.ts";
+import type { RelationType } from "./config.ts";
+import {
+  runSubagentJsonTask,
+  type SemanticLogger,
+  type SemanticSubagentRuntime,
+} from "./semantic-runtime.ts";
 
-type Logger = {
-  info: (msg: string) => void;
-  warn: (msg: string) => void;
+export type ExtractedEntityMention = {
+  mention: string;
+  kind: string | null;
 };
 
-type SubagentRuntime = {
-  run: (params: {
-    sessionKey: string;
-    message: string;
-    extraSystemPrompt?: string;
-    deliver?: boolean;
-    idempotencyKey?: string;
-  }) => Promise<{ runId: string }>;
-  waitForRun: (params: {
-    runId: string;
-    timeoutMs?: number;
-  }) => Promise<{ status: string; error?: string }>;
-  getSessionMessages: (params: {
-    sessionKey: string;
-    limit?: number;
-  }) => Promise<{ messages: unknown[] }>;
-  deleteSession: (params: {
-    sessionKey: string;
-    deleteTranscript?: boolean;
-  }) => Promise<void>;
+export type ExtractedMemoryCandidate = {
+  text: string;
+  memoryType: MemoryType;
+  entities: ExtractedEntityMention[];
+  expiresAtIso: string | null;
 };
 
-const EXTRACT_SESSION_KEY = "__supermemory-fact-extract";
+export type MemoryRelationshipDecision = {
+  targetId: string;
+  relationType: RelationType | "none";
+};
 
-const EXTRACTION_SYSTEM_PROMPT = `You are a fact extraction engine. Extract discrete, entity-centric facts from the conversation below.
+export type UpdateResolverCandidate = {
+  id: string;
+  text: string;
+  memoryType: MemoryType;
+  entityIds: string[];
+  createdAt: number;
+};
+
+export type EntityMergeCandidate = {
+  leftEntityId: string;
+  leftCanonicalName: string;
+  leftAliases: string[];
+  rightEntityId: string;
+  rightCanonicalName: string;
+  rightAliases: string[];
+};
+
+export type EntityMergeDecision = {
+  leftEntityId: string;
+  rightEntityId: string;
+  decision: "same" | "different";
+};
+
+const EXTRACTOR_TURN_MIN_CHARS = 15;
+const EXTRACTOR_MAX_ITEMS = 10;
+const EXTRACTOR_ITEM_MIN_CHARS = 10;
+const EXTRACTOR_ITEM_MAX_CHARS = 500;
+const RESOLVER_MAX_CANDIDATES = 12;
+const MERGE_RESOLVER_MAX_PAIRS = 24;
+
+export type SemanticRuntimeLike = SemanticSubagentRuntime;
+export type SemanticLogLike = SemanticLogger;
+
+export async function extractMemoryCandidates(
+  turnText: string,
+  subagent: SemanticSubagentRuntime,
+  log: SemanticLogger,
+  options?: { referenceTimeMs?: number },
+): Promise<ExtractedMemoryCandidate[]> {
+  if (!turnText || turnText.trim().length < EXTRACTOR_TURN_MIN_CHARS) return [];
+
+  const referenceTimeIso = new Date(options?.referenceTimeMs ?? Date.now()).toISOString();
+  const systemPrompt = `You are a multilingual memory extraction engine. Read the input and return a JSON array only.
+
+Each array item must have exactly these keys:
+- "text": string
+- "memoryType": one of "fact", "preference", "episode"
+- "entities": array of objects with exactly:
+  - "mention": string
+  - "kind": string or null
+- "expiresAtIso": string or null
 
 Rules:
-- Output one fact per line, nothing else
-- Entity-centric phrasing: "User prefers TypeScript" not "they said they like TS"
-- Atomic: one fact per line, never compound sentences
-- Skip greetings, filler, questions with no factual content, code snippets, error messages
-- Preserve temporal markers: "User has an exam tomorrow", "Meeting on January 15"
-- Use "User" for the human speaker's facts
-- Use the person/entity name when the fact is about someone else
-- For preferences: "User prefers X" or "User likes X"
-- For decisions: "User decided to use X" or "User switched to X"
-- For identity: "User works at X" or "User's name is X"
-- For projects: "User is working on X" or "Project X uses Y"
-- Maximum 10 facts per extraction
-- If nothing worth remembering, output exactly: NONE`;
+- The input may be in any language. Extract all memories and entity mentions in the exact original language of the input. Do not translate them to English.
+- "memoryType" must still use the English enum values above.
+- Keep each memory atomic: one discrete memory per item.
+- Preserve the original surface form for each entity mention.
+- "kind" is optional free-form metadata. Use null if unsure.
+- Only set "expiresAtIso" when the memory is an "episode".
+- Resolve relative time expressions against this reference timestamp: ${referenceTimeIso}
+- "expiresAtIso" must be a valid ISO-8601 timestamp or null.
+- Skip greetings, filler, pure questions, code, stack traces, and generic assistant advice.
+- Maximum 10 items.
+- If nothing is worth storing, return [].
 
-export async function extractFacts(
-  turnText: string,
-  subagent: SubagentRuntime,
-  log: Logger,
-): Promise<string[]> {
-  if (!turnText || turnText.trim().length < 15) return [];
+Return only valid JSON. No markdown, no prose, no comments.`;
 
   try {
-    // Clean up any previous extraction session
-    try {
-      await subagent.deleteSession({
-        sessionKey: EXTRACT_SESSION_KEY,
-        deleteTranscript: true,
-      });
-    } catch {
-      // session may not exist yet
-    }
-
-    // Run the extraction subagent
-    const idempotencyKey = `smex-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const { runId } = await subagent.run({
-      sessionKey: EXTRACT_SESSION_KEY,
+    const raw = await runSubagentJsonTask({
+      runtime: subagent,
+      taskPrefix: "__supermemory-extract",
       message: turnText,
-      extraSystemPrompt: EXTRACTION_SYSTEM_PROMPT,
-      deliver: false,
-      idempotencyKey,
+      systemPrompt,
     });
 
-    // Wait for completion (30s timeout — local models may need warmup time)
-    const result = await subagent.waitForRun({
-      runId,
-      timeoutMs: 30_000,
-    });
-
-    if (result.status !== "ok") {
-      log.warn(`memory-supermemory: fact extraction failed: ${result.error ?? result.status}`);
+    if (!raw?.trim()) return [];
+    const parsed = parseExtractionJson(raw);
+    if (!parsed) {
+      log.warn("memory-supermemory: extractor returned malformed JSON; skipping turn");
       return [];
     }
 
-    // Read the assistant's response
-    const { messages } = await subagent.getSessionMessages({
-      sessionKey: EXTRACT_SESSION_KEY,
-      limit: 5,
-    });
-
-    // Find the last assistant message
-    let extractedText = "";
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i];
-      if (msg && typeof msg === "object" && (msg as Record<string, unknown>).role === "assistant") {
-        const content = (msg as Record<string, unknown>).content;
-        if (typeof content === "string") {
-          extractedText = content;
-          break;
-        }
-        if (Array.isArray(content)) {
-          for (const block of content) {
-            if (
-              block &&
-              typeof block === "object" &&
-              (block as Record<string, unknown>).type === "text" &&
-              typeof (block as Record<string, unknown>).text === "string"
-            ) {
-              extractedText = (block as Record<string, unknown>).text as string;
-              break;
-            }
-          }
-          if (extractedText) break;
-        }
-      }
+    if (parsed.length > 0) {
+      log.info(`memory-supermemory: extracted ${parsed.length} semantic memories from text`);
     }
 
-    // Clean up session
-    try {
-      await subagent.deleteSession({
-        sessionKey: EXTRACT_SESSION_KEY,
-        deleteTranscript: true,
-      });
-    } catch {
-      // best-effort cleanup
-    }
-
-    if (!extractedText || extractedText.trim() === "NONE") return [];
-
-    // Parse: one fact per line, filter empties and noise
-    const facts = extractedText
-      .split("\n")
-      .map((line) => line.replace(/^[-•*\d.)\s]+/, "").trim())
-      .filter((line) => line.length >= 10 && line.length <= 500)
-      .filter((line) => line !== "NONE")
-      .filter((line) => !/^(here|these|the following|i found|extracted|facts?:)/i.test(line));
-
-    if (facts.length > 0) {
-      log.info(`memory-supermemory: extracted ${facts.length} facts from conversation turn`);
-    }
-
-    return facts.slice(0, 10);
+    return parsed;
   } catch (err) {
-    log.warn(`memory-supermemory: fact extraction error: ${String(err)}`);
+    log.warn(`memory-supermemory: extraction error: ${String(err)}`);
     return [];
   }
+}
+
+export async function resolveMemoryRelationships(
+  newMemory: {
+    text: string;
+    memoryType: MemoryType;
+    entityIds: string[];
+  },
+  candidates: UpdateResolverCandidate[],
+  subagent: SemanticSubagentRuntime,
+  log: SemanticLogger,
+): Promise<MemoryRelationshipDecision[]> {
+  if (candidates.length === 0) return [];
+
+  const trimmedCandidates = candidates.slice(0, RESOLVER_MAX_CANDIDATES);
+  const payload = JSON.stringify(
+    {
+      newMemory,
+      candidates: trimmedCandidates,
+    },
+    null,
+    2,
+  );
+
+  const systemPrompt = `You are a multilingual semantic memory resolver. Compare one new memory against candidate existing memories and decide, for each candidate, whether it is:
+- "updates": the new memory replaces, corrects, or supersedes the candidate
+- "related": the memories are meaningfully about the same entity/topic but neither supersedes the other
+- "none": no useful relationship
+
+Rules:
+- Input text may be in any language.
+- Respect the provided "memoryType"; do not reinterpret it.
+- Be conservative with "updates". Use it only when the new memory clearly replaces or corrects the old one.
+- If in doubt between "related" and "none", prefer "related" only when the semantic connection is genuinely strong.
+- Return a JSON array only.
+- Each item must have exactly:
+  - "targetId": string
+  - "relationType": one of "updates", "related", "none"
+- Return at most one "updates" decision across the whole array.
+- Keep the returned order meaningful, with the strongest decisions first.`;
+
+  try {
+    const raw = await runSubagentJsonTask({
+      runtime: subagent,
+      taskPrefix: "__supermemory-relate",
+      message: payload,
+      systemPrompt,
+    });
+
+    if (!raw?.trim()) return [];
+    const parsed = parseRelationshipJson(raw);
+    if (!parsed) {
+      log.warn("memory-supermemory: relationship resolver returned malformed JSON");
+      return [];
+    }
+
+    let seenUpdate = false;
+    const filtered: MemoryRelationshipDecision[] = [];
+    for (const decision of parsed) {
+      if (!trimmedCandidates.some((candidate) => candidate.id === decision.targetId)) continue;
+      if (decision.relationType === "updates") {
+        if (seenUpdate) continue;
+        seenUpdate = true;
+      }
+      filtered.push(decision);
+    }
+    return filtered;
+  } catch (err) {
+    log.warn(`memory-supermemory: relationship resolver error: ${String(err)}`);
+    return [];
+  }
+}
+
+export async function resolveEntityEquivalences(
+  pairs: EntityMergeCandidate[],
+  subagent: SemanticSubagentRuntime,
+  log: SemanticLogger,
+): Promise<EntityMergeDecision[]> {
+  if (pairs.length === 0) return [];
+
+  const trimmedPairs = pairs.slice(0, MERGE_RESOLVER_MAX_PAIRS);
+  const payload = JSON.stringify({ pairs: trimmedPairs }, null, 2);
+
+  const systemPrompt = `You are a multilingual entity-equivalence resolver. Decide whether each pair of canonical entities refers to the same real-world entity.
+
+Rules:
+- Input text may be in any language.
+- Treat spelling variants, transliteration variants, abbreviations, and accent differences as potentially the same entity.
+- Do not merge entities merely because they are semantically related or share a topic.
+- Return a JSON array only.
+- Each item must have exactly:
+  - "leftEntityId": string
+  - "rightEntityId": string
+  - "decision": "same" or "different"`;
+
+  try {
+    const raw = await runSubagentJsonTask({
+      runtime: subagent,
+      taskPrefix: "__supermemory-entity-merge",
+      message: payload,
+      systemPrompt,
+    });
+
+    if (!raw?.trim()) return [];
+    const parsed = parseEntityMergeJson(raw);
+    if (!parsed) {
+      log.warn("memory-supermemory: entity merge resolver returned malformed JSON");
+      return [];
+    }
+
+    return parsed.filter((decision) =>
+      trimmedPairs.some(
+        (pair) =>
+          pair.leftEntityId === decision.leftEntityId &&
+          pair.rightEntityId === decision.rightEntityId,
+      ),
+    );
+  } catch (err) {
+    log.warn(`memory-supermemory: entity merge resolver error: ${String(err)}`);
+    return [];
+  }
+}
+
+function parseExtractionJson(raw: string): ExtractedMemoryCandidate[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.trim());
+  } catch {
+    return null;
+  }
+
+  if (!Array.isArray(parsed)) return null;
+
+  const results: ExtractedMemoryCandidate[] = [];
+  for (const item of parsed.slice(0, EXTRACTOR_MAX_ITEMS)) {
+    const candidate = coerceMemoryCandidate(item);
+    if (candidate) {
+      results.push(candidate);
+    }
+  }
+
+  return results;
+}
+
+function coerceMemoryCandidate(value: unknown): ExtractedMemoryCandidate | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+
+  if (
+    typeof row.text !== "string" ||
+    row.text.trim().length < EXTRACTOR_ITEM_MIN_CHARS ||
+    row.text.trim().length > EXTRACTOR_ITEM_MAX_CHARS
+  ) {
+    return null;
+  }
+
+  const memoryType = normalizeMemoryType(row.memoryType);
+  if (!memoryType) return null;
+
+  const entities = Array.isArray(row.entities)
+    ? row.entities
+        .map(coerceEntityMention)
+        .filter((entity): entity is ExtractedEntityMention => entity !== null)
+    : [];
+
+  const expiresAtIso =
+    memoryType === "episode" ? normalizeIsoTimestamp(row.expiresAtIso) : null;
+
+  return {
+    text: row.text.trim(),
+    memoryType,
+    entities,
+    expiresAtIso,
+  };
+}
+
+function coerceEntityMention(value: unknown): ExtractedEntityMention | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  if (typeof row.mention !== "string") return null;
+  const mention = row.mention.trim();
+  if (mention.length === 0) return null;
+
+  const kind =
+    typeof row.kind === "string" && row.kind.trim().length > 0 ? row.kind.trim() : null;
+
+  return { mention, kind };
+}
+
+function parseRelationshipJson(raw: string): MemoryRelationshipDecision[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.trim());
+  } catch {
+    return null;
+  }
+
+  if (!Array.isArray(parsed)) return null;
+
+  const results: MemoryRelationshipDecision[] = [];
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const row = item as Record<string, unknown>;
+    if (typeof row.targetId !== "string") continue;
+    if (!isDecisionRelationType(row.relationType)) continue;
+    results.push({
+      targetId: row.targetId,
+      relationType: row.relationType,
+    });
+  }
+  return results;
+}
+
+function parseEntityMergeJson(raw: string): EntityMergeDecision[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.trim());
+  } catch {
+    return null;
+  }
+
+  if (!Array.isArray(parsed)) return null;
+
+  const results: EntityMergeDecision[] = [];
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const row = item as Record<string, unknown>;
+    if (typeof row.leftEntityId !== "string" || typeof row.rightEntityId !== "string") continue;
+    if (row.decision !== "same" && row.decision !== "different") continue;
+    results.push({
+      leftEntityId: row.leftEntityId,
+      rightEntityId: row.rightEntityId,
+      decision: row.decision,
+    });
+  }
+  return results;
+}
+
+function normalizeMemoryType(value: unknown): MemoryType | null {
+  if (value === "fact" || value === "preference" || value === "episode") {
+    return value;
+  }
+  return null;
+}
+
+function isDecisionRelationType(value: unknown): value is RelationType | "none" {
+  return value === "updates" || value === "related" || value === "none";
+}
+
+function normalizeIsoTimestamp(value: unknown): string | null {
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) return null;
+  return new Date(parsed).toISOString();
 }

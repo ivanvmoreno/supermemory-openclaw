@@ -9,22 +9,16 @@ export type EmbeddingConfig = {
   dimensions?: number;
 };
 
-export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
-export const MEMORY_CATEGORIES = [
-  "preference",
+export type MemoryType = (typeof MEMORY_TYPES)[number];
+export const MEMORY_TYPES = [
   "fact",
-  "decision",
-  "entity",
-  "project",
-  "instruction",
-  "other",
+  "preference",
+  "episode",
 ] as const;
-
-export type EntityExtractionMode = "pattern" | "llm";
 
 export type CaptureMode = "extract" | "off";
 
-export type RelationType = "updates" | "extends" | "derives";
+export type RelationType = "updates" | "related";
 
 export type SupermemoryConfig = {
   embedding: EmbeddingConfig;
@@ -32,7 +26,11 @@ export type SupermemoryConfig = {
   autoRecall: boolean;
   captureMode: CaptureMode;
   profileFrequency: number;
-  entityExtraction: EntityExtractionMode;
+  maxLongTermItems: number;
+  maxRecentItems: number;
+  recentWindowDays: number;
+  profileScanLimit: number;
+  promptMemoryMaxChars: number;
   forgetExpiredIntervalMinutes: number;
   temporalDecayDays: number;
   maxRecallResults: number;
@@ -48,6 +46,11 @@ const DEFAULT_EMBEDDING_PROVIDER = "ollama";
 const DEFAULT_EMBEDDING_MODEL = "nomic-embed-text";
 const DEFAULT_DB_PATH = join(homedir(), ".openclaw", "memory", "supermemory.db");
 const DEFAULT_PROFILE_FREQUENCY = 50;
+const DEFAULT_MAX_LONG_TERM_ITEMS = 20;
+const DEFAULT_MAX_RECENT_ITEMS = 10;
+const DEFAULT_RECENT_WINDOW_DAYS = 7;
+const DEFAULT_PROFILE_SCAN_LIMIT = 1000;
+const DEFAULT_PROMPT_MEMORY_MAX_CHARS = 500;
 const DEFAULT_FORGET_INTERVAL_MINUTES = 60;
 const DEFAULT_TEMPORAL_DECAY_DAYS = 90;
 const DEFAULT_MAX_RECALL_RESULTS = 10;
@@ -86,10 +89,14 @@ function resolveEnvVars(value: string): string {
 
 function clampNumber(value: unknown, fallback: number, min?: number, max?: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
-  let v = value;
-  if (min !== undefined) v = Math.max(v, min);
-  if (max !== undefined) v = Math.min(v, max);
-  return v;
+  let next = value;
+  if (min !== undefined) next = Math.max(next, min);
+  if (max !== undefined) next = Math.min(next, max);
+  return next;
+}
+
+function clampRatio(value: unknown, fallback: number): number {
+  return clampNumber(value, fallback, 0, 1);
 }
 
 export function parseSupermemoryConfig(value: unknown): SupermemoryConfig {
@@ -116,8 +123,18 @@ export function parseSupermemoryConfig(value: unknown): SupermemoryConfig {
     embedding: { provider, model, apiKey, baseUrl, dimensions },
     autoCapture: cfg.autoCapture !== false,
     autoRecall: cfg.autoRecall !== false,
+    captureMode: cfg.captureMode === "off" ? "off" : "extract",
     profileFrequency: clampNumber(cfg.profileFrequency, DEFAULT_PROFILE_FREQUENCY, 1, 1000),
-    entityExtraction: cfg.entityExtraction === "llm" ? "llm" : "pattern",
+    maxLongTermItems: clampNumber(cfg.maxLongTermItems, DEFAULT_MAX_LONG_TERM_ITEMS, 1),
+    maxRecentItems: clampNumber(cfg.maxRecentItems, DEFAULT_MAX_RECENT_ITEMS, 1),
+    recentWindowDays: clampNumber(cfg.recentWindowDays, DEFAULT_RECENT_WINDOW_DAYS, 1),
+    profileScanLimit: clampNumber(cfg.profileScanLimit, DEFAULT_PROFILE_SCAN_LIMIT, 1),
+    promptMemoryMaxChars: clampNumber(
+      cfg.promptMemoryMaxChars,
+      DEFAULT_PROMPT_MEMORY_MAX_CHARS,
+      20,
+      4000,
+    ),
     forgetExpiredIntervalMinutes: clampNumber(
       cfg.forgetExpiredIntervalMinutes,
       DEFAULT_FORGET_INTERVAL_MINUTES,
@@ -125,11 +142,10 @@ export function parseSupermemoryConfig(value: unknown): SupermemoryConfig {
     ),
     temporalDecayDays: clampNumber(cfg.temporalDecayDays, DEFAULT_TEMPORAL_DECAY_DAYS, 1),
     maxRecallResults: clampNumber(cfg.maxRecallResults, DEFAULT_MAX_RECALL_RESULTS, 1, 100),
-    vectorWeight: clampNumber(cfg.vectorWeight, DEFAULT_VECTOR_WEIGHT, 0, 1),
-    textWeight: clampNumber(cfg.textWeight, DEFAULT_TEXT_WEIGHT, 0, 1),
-    graphWeight: clampNumber(cfg.graphWeight, DEFAULT_GRAPH_WEIGHT, 0, 1),
+    vectorWeight: clampRatio(cfg.vectorWeight, DEFAULT_VECTOR_WEIGHT),
+    textWeight: clampRatio(cfg.textWeight, DEFAULT_TEXT_WEIGHT),
+    graphWeight: clampRatio(cfg.graphWeight, DEFAULT_GRAPH_WEIGHT),
     dbPath,
-    captureMode: cfg.captureMode === "off" ? "off" : "extract",
     captureMaxChars: clampNumber(cfg.captureMaxChars, DEFAULT_CAPTURE_MAX_CHARS, 100, 10000),
     debug: cfg.debug === true,
   };

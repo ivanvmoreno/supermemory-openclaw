@@ -28,6 +28,7 @@ export default {
     const vectorDims = vectorDimsForModel(cfg.embedding.model, cfg.embedding.dimensions)
     const db = new MemoryDB(cfg, vectorDims)
     const embeddings = createEmbeddingProvider(cfg.embedding, vectorDims, db)
+    const subagent = (api as unknown as { runtime?: { subagent?: unknown } }).runtime?.subagent ?? null
 
     const state = { interactionCount: 0 }
 
@@ -207,6 +208,8 @@ export default {
       db,
       embeddings,
       cfg,
+      semanticRuntime: subagent as any,
+      log: api.logger,
       get interactionCount() {
         return state.interactionCount
       },
@@ -232,11 +235,10 @@ export default {
     }
 
     if (cfg.autoCapture && cfg.captureMode !== "off") {
-      const subagent = (api as unknown as { runtime?: { subagent?: unknown } }).runtime?.subagent ?? null;
       if (!subagent) {
         api.logger.warn(
-          "memory-supermemory: subagent runtime not available — auto-capture (LLM fact extraction) is disabled. " +
-          "The memory_store tool still works for manual capture.",
+          "memory-supermemory: subagent runtime not available — auto-capture (LLM semantic extraction) is disabled. " +
+          "The memory_store tool will fall back to direct storage when semantic extraction is unavailable.",
         )
       }
       api.on(
@@ -269,7 +271,10 @@ export default {
     // Background service — forgetting + profile rebuild
     // ====================================================================
 
-    const forgettingService = new ForgettingService(db, cfg, api.logger)
+    const forgettingService = new ForgettingService(db, cfg, api.logger, {
+      embeddings,
+      semanticRuntime: subagent as any,
+    })
 
     api.registerService({
       id: "openclaw-memory-supermemory",

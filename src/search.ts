@@ -16,9 +16,17 @@ export type SearchResult = {
 export type SearchOptions = {
   maxResults?: number;
   minScore?: number;
-  containerTag?: string;
   includeSuperseded?: boolean;
 };
+
+const DEFAULT_MIN_SCORE = 0.1;
+const VECTOR_MIN_SCORE_FACTOR = 0.5;
+const GRAPH_SEED_LIMIT = 5;
+const GRAPH_HOP_DEPTH = 2;
+const GRAPH_NEW_MEMORY_SCORE = 0.5;
+const GRAPH_EXISTING_MEMORY_SCORE = 0.3;
+const MMR_LAMBDA = 0.7;
+const MMR_SAME_SOURCE_PENALTY = 0.8;
 
 // ---------------------------------------------------------------------------
 // Hybrid search
@@ -32,7 +40,7 @@ export async function hybridSearch(
   options?: SearchOptions,
 ): Promise<SearchResult[]> {
   const maxResults = options?.maxResults ?? cfg.maxRecallResults;
-  const minScore = options?.minScore ?? 0.1;
+  const minScore = options?.minScore ?? DEFAULT_MIN_SCORE;
   const fetchLimit = maxResults * 3;
 
   const scoreMap = new Map<string, { vectorScore: number; ftsScore: number; graphScore: number }>();
@@ -50,7 +58,11 @@ export async function hybridSearch(
   if (db.isVectorAvailable) {
     try {
       const queryVector = await embeddings.embed(query);
-      const vectorResults = db.vectorSearch(queryVector, fetchLimit, minScore * 0.5);
+      const vectorResults = db.vectorSearch(
+        queryVector,
+        fetchLimit,
+        minScore * VECTOR_MIN_SCORE_FACTOR,
+      );
       for (const vr of vectorResults) {
         getEntry(vr.id).vectorScore = vr.score;
       }
@@ -73,16 +85,19 @@ export async function hybridSearch(
         const bScore = b[1].vectorScore * cfg.vectorWeight + b[1].ftsScore * cfg.textWeight;
         return bScore - aScore;
       })
-      .slice(0, 5)
+      .slice(0, GRAPH_SEED_LIMIT)
       .map(([id]) => id);
 
     for (const seedId of topIds) {
-      const related = db.getRelatedMemoryIds(seedId, 2);
+      const related = db.getRelatedMemoryIds(seedId, GRAPH_HOP_DEPTH);
       for (const relatedId of related) {
         if (!scoreMap.has(relatedId)) {
-          getEntry(relatedId).graphScore = 0.5;
+          getEntry(relatedId).graphScore = GRAPH_NEW_MEMORY_SCORE;
         } else {
-          getEntry(relatedId).graphScore = Math.max(getEntry(relatedId).graphScore, 0.3);
+          getEntry(relatedId).graphScore = Math.max(
+            getEntry(relatedId).graphScore,
+            GRAPH_EXISTING_MEMORY_SCORE,
+          );
         }
       }
     }
@@ -96,10 +111,12 @@ export async function hybridSearch(
   const merged: ScoredItem[] = [];
   for (const [id, scores] of scoreMap) {
     const combined =
-      (scores.vectorScore * vectorWeight +
-        scores.ftsScore * textWeight +
-        scores.graphScore * graphWeight) /
-      totalWeight;
+      totalWeight > 0
+        ? (scores.vectorScore * vectorWeight +
+            scores.ftsScore * textWeight +
+            scores.graphScore * graphWeight) /
+          totalWeight
+        : Math.max(scores.vectorScore, scores.ftsScore, scores.graphScore);
 
     if (combined < minScore) continue;
 
@@ -117,7 +134,12 @@ export async function hybridSearch(
   merged.sort((a, b) => b.score - a.score);
 
   // 6. MMR diversity re-ranking (simple — skip very similar consecutive results)
-  const diversified = mmrRerank(merged, maxResults);
+  const diversified = mmrRerank(
+    merged,
+    maxResults,
+    MMR_LAMBDA,
+    MMR_SAME_SOURCE_PENALTY,
+  );
 
   // 7. Hydrate results
   const results: SearchResult[] = [];
@@ -144,7 +166,8 @@ export async function hybridSearch(
 function mmrRerank(
   items: Array<{ id: string; score: number; primarySource: "vector" | "fts" | "graph" }>,
   limit: number,
-  lambda = 0.7,
+  lambda: number,
+  sameSourcePenalty: number,
 ): typeof items {
   if (items.length <= limit) return items;
 
@@ -164,7 +187,8 @@ function mmrRerank(
       const relevance = remaining[i].score;
       // Penalize items from the same source as recently selected
       const lastSelected = selected[selected.length - 1];
-      const diversity = lastSelected?.primarySource === remaining[i].primarySource ? 0.8 : 1.0;
+      const diversity =
+        lastSelected?.primarySource === remaining[i].primarySource ? sameSourcePenalty : 1.0;
       const mmrScore = lambda * relevance + (1 - lambda) * diversity;
 
       if (mmrScore > bestScore) {
@@ -177,25 +201,4 @@ function mmrRerank(
   }
 
   return selected;
-}
-
-// ---------------------------------------------------------------------------
-// Extract keywords for FTS-only mode
-// ---------------------------------------------------------------------------
-
-const STOP_WORDS = new Set([
-  "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-  "have", "has", "had", "do", "does", "did", "will", "would", "shall",
-  "should", "may", "might", "must", "can", "could", "i", "me", "my",
-  "we", "our", "you", "your", "he", "she", "it", "they", "them",
-  "what", "which", "who", "when", "where", "why", "how", "that", "this",
-  "and", "or", "but", "if", "then", "else", "for", "of", "to", "in",
-  "on", "at", "by", "with", "from", "about", "into", "not", "no",
-]);
-
-export function extractSearchKeywords(query: string): string {
-  return query
-    .split(/\s+/)
-    .filter((w) => w.length > 2 && !STOP_WORDS.has(w.toLowerCase()))
-    .join(" ");
 }

@@ -1,5 +1,5 @@
 import type { SupermemoryConfig } from "./config.ts";
-import type { MemoryDB } from "./db.ts";
+import type { MemoryDB, MemoryRow } from "./db.ts";
 import {
   dedupeMemoryTexts,
   normalizeMemoryText,
@@ -12,31 +12,24 @@ import {
 // ---------------------------------------------------------------------------
 
 export type UserProfile = {
-  static: string[];
-  dynamic: string[];
+  longTerm: string[];
+  recent: string[];
   updatedAt: number;
 };
+
+const PROFILE_REBUILD_MAX_AGE_MS = 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Profile builder
 // ---------------------------------------------------------------------------
 
-const STATIC_CATEGORIES = new Set(["preference", "fact", "entity", "instruction"]);
-const DYNAMIC_CATEGORIES = new Set(["decision", "project", "other"]);
-
-const MAX_STATIC_ITEMS = 20;
-const MAX_DYNAMIC_ITEMS = 10;
-const DYNAMIC_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-const PROFILE_SCAN_LIMIT = 1000;
-
-export function buildUserProfile(db: MemoryDB, _cfg: SupermemoryConfig): UserProfile {
+export function buildUserProfile(db: MemoryDB, cfg: SupermemoryConfig): UserProfile {
   const now = Date.now();
+  const recentWindowMs = cfg.recentWindowDays * 24 * 60 * 60 * 1000;
+  const allActive = prioritizePinned(db.listActiveMemories(cfg.profileScanLimit));
 
-  // Static profile: high-importance, long-lived facts
-  const allActive = db.listActiveMemories(PROFILE_SCAN_LIMIT);
-
-  const staticItems: string[] = [];
-  const dynamicItems: string[] = [];
+  const longTerm: string[] = [];
+  const recent: string[] = [];
   const seen = new Set<string>();
 
   for (const memory of allActive) {
@@ -44,51 +37,53 @@ export function buildUserProfile(db: MemoryDB, _cfg: SupermemoryConfig): UserPro
     const normalized = normalizeMemoryText(memory.text);
     if (!normalized || seen.has(normalized)) continue;
 
-    const displayText = sanitizeMemoryTextForPrompt(memory.text, 500);
+    const displayText = sanitizeMemoryTextForPrompt(memory.text, cfg.promptMemoryMaxChars);
     if (!displayText) continue;
 
-    const isRecent = now - memory.created_at < DYNAMIC_WINDOW_MS;
+    const isPinned = memory.pinned;
+    const qualifiesForLongTerm =
+      isPinned ||
+      memory.memory_type === "fact" ||
+      memory.memory_type === "preference";
 
-    if (STATIC_CATEGORIES.has(memory.category) && memory.importance >= 0.5) {
-      if (staticItems.length < MAX_STATIC_ITEMS) {
-        staticItems.push(displayText);
-        seen.add(normalized);
-        continue;
-      }
+    if (qualifiesForLongTerm && longTerm.length < cfg.maxLongTermItems) {
+      longTerm.push(displayText);
+      seen.add(normalized);
+      continue;
     }
 
-    if (isRecent && (DYNAMIC_CATEGORIES.has(memory.category) || memory.access_count > 0)) {
-      if (dynamicItems.length < MAX_DYNAMIC_ITEMS) {
-        dynamicItems.push(displayText);
-        seen.add(normalized);
-      }
+    const isRecent = now - memory.created_at < recentWindowMs;
+    const qualifiesForRecent = memory.memory_type === "episode" && isRecent;
+
+    if (qualifiesForRecent && recent.length < cfg.maxRecentItems) {
+      recent.push(displayText);
+      seen.add(normalized);
     }
   }
 
-  // Cache the profile
-  db.setProfileCache("static", staticItems);
-  db.setProfileCache("dynamic", dynamicItems);
+  db.setProfileCache("longTerm", longTerm);
+  db.setProfileCache("recent", recent);
 
-  return { static: staticItems, dynamic: dynamicItems, updatedAt: now };
+  return { longTerm, recent, updatedAt: now };
 }
 
-export function getCachedProfile(db: MemoryDB): UserProfile | null {
-  const staticCache = db.getProfileCache("static");
-  const dynamicCache = db.getProfileCache("dynamic");
+export function getCachedProfile(db: MemoryDB, cfg: SupermemoryConfig): UserProfile | null {
+  const longTermCache = db.getProfileCache("longTerm");
+  const recentCache = db.getProfileCache("recent");
 
-  if (!staticCache || !dynamicCache) return null;
+  if (!longTermCache || !recentCache) return null;
 
-  const staticItems = dedupeMemoryTexts(JSON.parse(staticCache.content) as string[])
-    .map((item) => sanitizeMemoryTextForPrompt(item, 500))
+  const longTerm = dedupeMemoryTexts(JSON.parse(longTermCache.content) as string[])
+    .map((item) => sanitizeMemoryTextForPrompt(item, cfg.promptMemoryMaxChars))
     .filter(Boolean);
-  const dynamicItems = dedupeMemoryTexts(JSON.parse(dynamicCache.content) as string[])
-    .map((item) => sanitizeMemoryTextForPrompt(item, 500))
+  const recent = dedupeMemoryTexts(JSON.parse(recentCache.content) as string[])
+    .map((item) => sanitizeMemoryTextForPrompt(item, cfg.promptMemoryMaxChars))
     .filter(Boolean);
 
   return {
-    static: staticItems,
-    dynamic: dynamicItems,
-    updatedAt: Math.max(staticCache.updated_at, dynamicCache.updated_at),
+    longTerm,
+    recent,
+    updatedAt: Math.max(longTermCache.updated_at, recentCache.updated_at),
   };
 }
 
@@ -97,14 +92,11 @@ export function shouldRebuildProfile(
   cfg: SupermemoryConfig,
   interactionCount: number,
 ): boolean {
-  const cached = getCachedProfile(db);
+  const cached = getCachedProfile(db, cfg);
   if (!cached) return true;
 
-  // Rebuild every N interactions
-  if (interactionCount % cfg.profileFrequency === 0) return true;
-
-  // Rebuild if profile is older than 1 hour
-  if (Date.now() - cached.updatedAt > 60 * 60 * 1000) return true;
+  if (interactionCount > 0 && interactionCount % cfg.profileFrequency === 0) return true;
+  if (Date.now() - cached.updatedAt > PROFILE_REBUILD_MAX_AGE_MS) return true;
 
   return false;
 }
@@ -117,37 +109,49 @@ export function getOrBuildProfile(
   if (shouldRebuildProfile(db, cfg, interactionCount)) {
     return buildUserProfile(db, cfg);
   }
-  return getCachedProfile(db) ?? buildUserProfile(db, cfg);
+  return getCachedProfile(db, cfg) ?? buildUserProfile(db, cfg);
 }
 
 // ---------------------------------------------------------------------------
 // Format for prompt injection
 // ---------------------------------------------------------------------------
 
-export function formatProfileForPrompt(profile: UserProfile): string {
-  const staticItems = dedupeMemoryTexts(profile.static)
-    .map((item) => sanitizeMemoryTextForPrompt(item, 500))
+export function formatProfileForPrompt(
+  profile: UserProfile,
+  cfg: SupermemoryConfig,
+): string {
+  const longTerm = dedupeMemoryTexts(profile.longTerm)
+    .map((item) => sanitizeMemoryTextForPrompt(item, cfg.promptMemoryMaxChars))
     .filter(Boolean);
-  const dynamicItems = dedupeMemoryTexts(profile.dynamic)
-    .map((item) => sanitizeMemoryTextForPrompt(item, 500))
+  const recent = dedupeMemoryTexts(profile.recent)
+    .map((item) => sanitizeMemoryTextForPrompt(item, cfg.promptMemoryMaxChars))
     .filter(Boolean);
 
   const lines: string[] = [];
 
-  if (staticItems.length > 0) {
+  if (longTerm.length > 0) {
     lines.push("## User Profile (Long-term)");
-    for (const item of staticItems) {
+    for (const item of longTerm) {
       lines.push(`- ${item}`);
     }
   }
 
-  if (dynamicItems.length > 0) {
+  if (recent.length > 0) {
     lines.push("");
     lines.push("## Recent Context");
-    for (const item of dynamicItems) {
+    for (const item of recent) {
       lines.push(`- ${item}`);
     }
   }
 
   return lines.join("\n");
+}
+
+function prioritizePinned(memories: MemoryRow[]): MemoryRow[] {
+  return [...memories].sort((a, b) => {
+    if (a.pinned !== b.pinned) return Number(b.pinned) - Number(a.pinned);
+    if (a.access_count !== b.access_count) return b.access_count - a.access_count;
+    if (a.updated_at !== b.updated_at) return b.updated_at - a.updated_at;
+    return b.created_at - a.created_at;
+  });
 }

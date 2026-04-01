@@ -4,62 +4,77 @@ Local graph-based memory plugin for [OpenClaw](https://github.com/nichochar/open
 
 > **Disclaimer:** This is an independent project. It is not affiliated with, endorsed by, or maintained by the Supermemory team. The name reflects architectural inspiration, not a partnership.
 
-## Features
+## ✨ Features
 
-- **LLM Fact Extraction** — Extracts discrete, entity-centric facts from each conversation turn via an LLM subagent, matching Supermemory's cloud approach locally.
-- **Graph Memory** — Automatic entity extraction, relationship tracking (Updates / Extends / Derives), memory versioning with `parent_memory_id` chains.
-- **User Profiles** — Static long-term facts + dynamic recent context, automatically maintained and injected into system prompt. Static memories (`is_static`) are protected from decay.
-- **Automatic Forgetting** — Temporal expiration for time-bound facts (including absolute dates like "January 15"), decay for low-importance unused memories, contradiction resolution.
-- **Hybrid Search** — BM25 keyword (FTS5) + graph-augmented multi-hop retrieval with MMR diversity re-ranking. Superseded memories are filtered at the query level. Vector similarity (sqlite-vec) used when available.
-- **Auto-Recall** — Injects relevant memories + user profile before every AI turn via the `before_prompt_build` hook.
-- **OpenClaw Runtime Integration** — Registers memory tools, a built-in memory search manager, and a pre-compaction memory flush plan when the host API supports them.
+- 🌍 **Multilingual Support** — LLM extracts memories and entities in the user's original language, while lexical deduplication uses multilingual stopword filtering and Unicode-aware tokenization to accurately process diverse character sets.
+- 📝 **LLM Semantic Extraction** — Extracts typed atomic memories, raw entity mentions, and temporal metadata from each conversation turn via an LLM subagent.
+- 🕸️ **Graph Memory** — Tracks canonical entities plus raw aliases, relationship edges (`updates` / `related`), and memory versioning.
+- 👤 **User Profiles** — Long-term durable memories + recent episodic context, automatically maintained and injected into the system prompt.
+- 🧹 **Automatic Forgetting** — Temporal expiration for episodic memories, chronological decay for unpinned episodes, and deferred LLM-driven entity merging in the background.
+- 🔍 **Hybrid Search** — BM25 keyword (FTS5) + graph-augmented multi-hop retrieval with MMR diversity re-ranking (penalizing candidates from the same search source). Superseded memories are filtered at the query level. Vector similarity (sqlite-vec) used when available.
+- ⚡ **Auto-Recall** — Injects relevant memories + user profile before every AI turn.
+- 🔌 **OpenClaw Runtime Integration** — Registers memory tools, a built-in memory search manager, and a pre-compaction memory flush plan.
 
 ## How It Works
 
 ```mermaid
-flowchart LR
-    subgraph input ["💬 Conversation"]
-        A[User message] --> B[AI response]
+flowchart TD
+    subgraph Conversation ["💬 Conversation Flow"]
+        direction LR
+        U([👤 User Message]) --> AI([🤖 AI Response])
     end
 
-    subgraph extract ["🧠 Memory Engine"]
-        C[Extract discrete facts via LLM]
-        C --> D[Deduplicate]
-        D --> E[Classify & embed]
+    subgraph Extraction ["🧠 Multilingual Memory Engine"]
+        direction TB
+        Ext["Extract Facts, Episodes, Preferences"]
+        Dedup["Deduplication\n (Lexical Filter + Vector Match)"]
+        Embed["Embeddings API"]
+        
+        Ext --> Dedup
+        Dedup --> Embed
     end
 
-    subgraph graph ["🔗 Knowledge Graph"]
-        F["Link entities\n(people, projects)"]
-        F --> G{Relationship detection}
-        G --> H["🔄 Updates — new fact\nsupersedes old"]
-        G --> I["➕ Extends — enriches\nexisting fact"]
-        G --> J["🔮 Derives — inferred\nconnection"]
+    subgraph Storage ["🔗 SQLite Knowledge Graph"]
+        direction TB
+        DB_Mem[("💾 Memories\n(Text + Vector)")]
+        DB_Ent[("🏷️ Entities\n(Aliases & Canonical)")]
+        DB_Rel[("🔗 Relationships\n(Updates & Related)")]
+        
+        DB_Mem --- DB_Ent
+        DB_Mem --- DB_Rel
     end
 
-    subgraph recall ["🔎 Recall"]
-        K["User Profile\n(static + dynamic facts)"]
-        L["Hybrid Search\n(vector + keyword + graph)"]
-        K --> M[Inject into next AI turn]
-        L --> M
+    subgraph Retrieval ["🔎 Auto-Recall & Search"]
+        direction TB
+        HybSearch["🔦 Hybrid Search\n(BM25 Keyword + Vector + Graph Hops)"]
+        Rerank["⚖️ MMR Diversity Re-ranking"]
+        Profile["👤 User Profile\n(Pinned, Long-Term, Recent Context)"]
+        
+        HybSearch --> Rerank
     end
 
-    B --> C
-    E --> F
-    J --> K
-    H --> K
-    I --> K
+    %% Connections
+    AI -->|🎣 Auto-Capture Hook| Ext
+    Embed -->|💾 Store| DB_Mem
+    DB_Mem -->|⚙️ Extract Relationships| DB_Rel
+    DB_Mem -->|💧 Hydrate Profile| Profile
+    
+    U -.->|⚡ Auto-Recall Hook| HybSearch
+    DB_Mem -.-> HybSearch
+    Rerank -.->|📥 Inject Context| AI
+    Profile -.->|📥 Inject Context| AI
 ```
 
-1. **You talk to your AI normally.** Share preferences, mention projects, discuss problems.
-2. **Auto-capture** uses your configured LLM to extract discrete facts from the last conversation turn (both user and assistant messages).
-3. **Graph engine** links each extracted fact to entities and detects relationships:
+1. **You talk to your AI.** Share preferences, mention projects, discuss problems.
+2. **Auto-capture** uses your configured LLM to extract typed atomic memories plus raw entity mentions from the last conversation turn.
+3. **Graph engine** stores those memories, maps mentions to canonical entities, and detects relationships:
    - **Updates** — "Iván moved to Copenhagen" supersedes "Iván lives in Madrid"
-   - **Extends** — "Iván leads a research team of 4" enriches "Iván is an AI Scientist at Santander"
-   - **Derives** — Inferred connections from shared entities
-4. **Auto-recall** injects your user profile + relevant memories before each AI turn.
-5. **Automatic forgetting** cleans up expired time-bound facts and decays unused low-importance memories.
+   - **Related** — "Iván works in a research team of 4" is connected to "Iván is an AI Scientist at Santander"
+4. **Background maintenance** can merge aliases like "Ivan" and "Iván" into the same canonical entity later.
+5. **Auto-recall** injects your user profile + relevant memories before each AI turn.
+6. **Automatic forgetting** cleans up expired episodic memories and removes stale unused episodes.
 
-## Quick Start
+## 🚀 Quick Start
 
 ### Step 1: Install the plugin
 
@@ -89,9 +104,7 @@ Edit `~/.openclaw/openclaw.json` and add **both** the memory slot and the plugin
             provider: "openai",
             model: "text-embedding-3-small",
             apiKey: "${OPENAI_API_KEY}"    // reads from env var
-          },
-          autoRecall: true,
-          autoCapture: true
+          }
         }
       }
     }
@@ -128,7 +141,7 @@ Zero counts are normal on first run. `Vector search: unavailable` is expected �
 
 You need an embedding provider for semantic search. Choose one:
 
-### OpenAI (recommended for simplicity)
+### OpenAI
 
 ```json5
 embedding: {
@@ -144,7 +157,7 @@ Set the environment variable before starting OpenClaw:
 export OPENAI_API_KEY="sk-..."
 ```
 
-### Ollama (fully local, no API key)
+### Ollama
 
 Install [Ollama](https://ollama.ai) and pull a model:
 
@@ -193,7 +206,7 @@ The AI uses these tools autonomously:
 | Tool | Description |
 |------|-------------|
 | `memory_search` | Hybrid search across all memories (vector + keyword + graph) |
-| `memory_store` | Save information with automatic entity extraction, relationship detection, and optional `isStatic` flag for permanent facts |
+| `memory_store` | Save information with automatic entity extraction and relationship detection |
 | `memory_forget` | Delete memories by ID or search query |
 | `memory_profile` | View/rebuild the automatically maintained user profile |
 
@@ -202,25 +215,10 @@ The AI uses these tools autonomously:
 ```bash
 openclaw supermemory stats              # Show memory statistics
 openclaw supermemory search <query>     # Search memories
-openclaw supermemory search "rust" --limit 5
+openclaw supermemory search "<term>" --limit 5
 openclaw supermemory profile            # View user profile
 openclaw supermemory profile --rebuild  # Force rebuild profile
 openclaw supermemory wipe --confirm     # Delete all memories
-```
-
-## Verifying Memories
-
-After chatting with the AI, you can verify memories are being captured:
-
-```bash
-# Check memory counts increased
-openclaw supermemory stats
-
-# Search for something you mentioned
-openclaw supermemory search "your topic"
-
-# View your auto-built profile
-openclaw supermemory profile
 ```
 
 ## Vector Search
@@ -229,60 +227,83 @@ The plugin uses FTS5 keyword search + graph traversal by default. Vector similar
 
 If your OpenClaw build includes `sqlite-vec`, the plugin will detect and use it automatically.
 
-## Troubleshooting
-
-### "plugins.allow is empty" warning
-
-Suppress it by adding:
-
-```json5
-plugins: {
-  allow: ["openclaw-memory-supermemory"]
-}
-```
-
 ## Configuration Reference
+
+All settings are optional. The plugin now exposes only the operational knobs that still affect behavior directly.
+
+### Core
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `embedding.provider` | string | `"ollama"` | Embedding provider (`ollama`, `openai`, etc.) |
-| `embedding.model` | string | `"nomic-embed-text"` | Embedding model name |
+| `embedding.provider` | string | `"openai"` | Embedding provider (`ollama`, `openai`, etc.) |
+| `embedding.model` | string | `"text-embedding-3-small"` | Embedding model name |
 | `embedding.apiKey` | string | — | API key (cloud providers only, supports `${ENV_VAR}` syntax) |
 | `embedding.baseUrl` | string | — | Custom API base URL |
 | `embedding.dimensions` | number | auto | Vector dimensions (auto-detected for known models) |
 | `autoCapture` | boolean | `true` | Auto-capture memories from conversations |
-| `captureMode` | string | `"extract"` | `"extract"` (LLM fact extraction) or `"off"` (disable auto-capture) |
+| `captureMode` | string | `"extract"` | `"extract"` (LLM semantic extraction) or `"off"` (disable auto-capture) |
 | `autoRecall` | boolean | `true` | Auto-inject memories + profile into context |
-| `profileFrequency` | number | `50` | Rebuild user profile every N interactions |
-| `entityExtraction` | string | `"pattern"` | Current implementation is pattern-based. `"llm"` is reserved and currently behaves the same as `"pattern"`. |
-| `forgetExpiredIntervalMinutes` | number | `60` | Minutes between forgetting cleanup runs |
-| `temporalDecayDays` | number | `90` | Days before low-importance unused memories decay |
-| `maxRecallResults` | number | `10` | Max memories injected per auto-recall |
+| `dbPath` | string | `~/.openclaw/memory/supermemory.db` | SQLite database path |
+| `debug` | boolean | `false` | Enable verbose logging |
+
+### Profile And Prompt
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `profileFrequency` | number | `50` | Rebuild the profile every N interactions |
+| `maxLongTermItems` | number | `20` | Max memories included in the long-term profile section |
+| `maxRecentItems` | number | `10` | Max memories included in the recent profile section |
+| `recentWindowDays` | number | `7` | How many days count as recent for episodic memories |
+| `profileScanLimit` | number | `1000` | Max active memories scanned when rebuilding the profile |
+| `promptMemoryMaxChars` | number | `500` | Max characters per memory item when injecting profile or recall context |
+
+### Recall And Search
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `maxRecallResults` | number | `10` | Default max results returned by memory search |
 | `vectorWeight` | number | `0.5` | Weight for vector similarity in hybrid search |
 | `textWeight` | number | `0.3` | Weight for BM25 keyword search |
 | `graphWeight` | number | `0.2` | Weight for graph-augmented retrieval |
-| `dbPath` | string | `~/.openclaw/memory/supermemory.db` | SQLite database path |
-| `captureMaxChars` | number | `2000` | Max message length for auto-capture |
-| `debug` | boolean | `false` | Enable verbose logging |
 
-## Fact Extraction
+### Capture And Extraction
 
-By default, the plugin uses your configured LLM to extract discrete, entity-centric facts from each conversation turn.
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `captureMaxChars` | number | `2000` | Max characters from the assembled conversation turn sent to auto-capture extraction |
+
+### Relationships And Forgetting
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `forgetExpiredIntervalMinutes` | number | `60` | Minutes between forgetting cleanup runs |
+| `temporalDecayDays` | number | `90` | Days before stale unpinned episodic memories decay |
+
+## Semantic Extraction
+
+The plugin uses your configured LLM to extract typed atomic memories, raw entity mentions, and temporal metadata from each conversation turn.
 
 **Input conversation:**
 > "Caught up with Iván today. He's working at Santander as an AI Scientist now, doing research on knowledge graphs. He lives in Madrid and mentioned a deadline next Tuesday for a paper submission."
 
 **Extracted memories:**
-- Iván works at Santander as an AI Scientist
-- Iván researches knowledge graphs
-- Iván lives in Madrid
-- Iván has a paper submission deadline next Tuesday
+- `fact`: Iván works at Santander as an AI Scientist
+- `fact`: Iván researches knowledge graphs
+- `fact`: Iván lives in Madrid
+- `episode`: Iván has a paper submission deadline next Tuesday
 
-Each fact is stored as a separate memory with automatic entity linking, relationship detection (Updates/Extends/Derives), and temporal expiration.
+Each extracted memory is stored separately with:
+- a `memoryType` (`fact`, `preference`, or `episode`)
+- raw entity mentions such as `Iván`, `Santander`, and `Madrid`
+- optional temporal metadata such as `expiresAtIso`
+
+Those raw mentions are linked to canonical entities later, so the system can preserve original surface forms while still grouping aliases over time.
 
 Set `captureMode: "off"` to disable auto-capture entirely.
 
 ## Architecture
+
+> **For an in-depth breakdown of the graph logic, scoring algorithms, and background processes, see the following [document](./docs/memory.md).**
 
 ```
 openclaw-memory-supermemory/
@@ -296,14 +317,16 @@ openclaw-memory-supermemory/
 │           └── run.ts          # Local OpenClaw integration battery / benchmark runner
 ├── src/
 │   ├── config.ts               # Config parsing + defaults
-│   ├── db.ts                   # SQLite: memories, entities, relationships, profiles
+│   ├── db.ts                   # SQLite: memories, canonical entities, aliases, relationships, profiles
 │   ├── embeddings.ts           # Ollama + OpenAI-compatible embedding providers
-│   ├── fact-extractor.ts        # LLM fact extraction via OpenClaw subagent
-│   ├── graph-engine.ts         # Entity extraction, relationship detection, temporal parsing
+│   ├── fact-extractor.ts       # LLM semantic extraction + relationship/entity resolvers
+│   ├── graph-engine.ts         # Storage orchestration, alias linking, update resolution
+│   ├── entity-text.ts          # Entity alias normalization helpers
+│   ├── semantic-runtime.ts     # Shared subagent runtime helpers for JSON tasks
 │   ├── memory-text.ts          # Injected/synthetic memory filtering and prompt-safe sanitization
 │   ├── search.ts               # Hybrid search (vector + FTS5 + graph)
-│   ├── profile-builder.ts      # Static + dynamic user profile
-│   ├── forgetting.ts           # Temporal decay, expiration, cleanup
+│   ├── profile-builder.ts      # Long-term + recent user profile
+│   ├── forgetting.ts           # Expiration, stale-episode cleanup, deferred entity merging
 │   ├── tools.ts                # Agent tools (search, store, forget, profile)
 │   ├── hooks.ts                # Auto-recall + guarded auto-capture hooks
 │   └── cli.ts                  # CLI commands
@@ -313,15 +336,16 @@ openclaw-memory-supermemory/
 
 All data stored in a single SQLite database:
 
-- **memories** — Text, embeddings, importance, category, expiration, access tracking, `is_static`, `parent_memory_id`
-- **entities** — Extracted entities (people, projects, tech, emails, URLs)
-- **entity_mentions** — Links between memories and entities
-- **relationships** — Graph edges (updates / extends / derives)
-- **profile_cache** — Cached static + dynamic user profile
+- **memories** — Text, embeddings, memory type, expiration, access tracking, `pinned`, `parent_memory_id`
+- **entities** — Canonical entity clusters
+- **entity_aliases** — Raw observed entity names / surface forms
+- **entity_mentions** — Links between memories and aliases
+- **relationships** — Graph edges (`updates` / `related`)
+- **profile_cache** — Cached long-term + recent user profile
 - **memories_fts** — FTS5 virtual table for keyword search
 - **memories_vec** — sqlite-vec virtual table for vector similarity (when available)
 
-## LongMemEval Integration
+## 🧪 LongMemEval Integration
 
 The repo includes a [LongMemEval](https://github.com/xiaowu0162/LongMemEval) runner that evaluates this plugin through a real local OpenClaw agent invocation while keeping benchmark state isolated from your normal `~/.openclaw` profile.
 

@@ -1,439 +1,571 @@
-import type { MemoryCategory, RelationType } from "./config.ts";
-import type { MemoryDB, MemoryRow } from "./db.ts";
+import type { MemoryType } from "./config.ts";
+import type { MemoryDB, MemoryEntityMentionRow, MemoryRow } from "./db.ts";
+import { normalizeEntityAliasText } from "./entity-text.ts";
 import type { EmbeddingProvider } from "./embeddings.ts";
+import {
+  resolveMemoryRelationships,
+  type ExtractedEntityMention,
+  type ExtractedMemoryCandidate,
+  type SemanticLogLike,
+  type SemanticRuntimeLike,
+  type UpdateResolverCandidate,
+} from "./fact-extractor.ts";
+import { prepareMemoryTextForStorage } from "./memory-text.ts";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+const MAX_MEMORY_TEXT_CHARS = 2000;
+const DEDUP_FTS_CANDIDATE_LIMIT = 12;
+const LEXICAL_DUPLICATE_SCORE_THRESHOLD = 0.88;
+const NEAR_DUPLICATE_VECTOR_THRESHOLD = 0.95;
+const UPDATE_VECTOR_MIN_SCORE = 0.55;
+const UPDATE_VECTOR_CANDIDATE_LIMIT = 8;
+const UPDATE_RESOLVER_CANDIDATE_LIMIT = 12;
+const MAX_RELATED_EDGES = 5;
 
-export type ExtractedEntity = {
-  name: string;
-  type: string;
-};
+import stopwordsIso from "stopwords-iso";
 
-export type ExtractedMemoryInfo = {
-  category: MemoryCategory;
-  importance: number;
-  entities: ExtractedEntity[];
-  expiresAt: number | null;
-};
+const DEDUP_TOKEN_PATTERN = /[\p{Letter}\p{Number}]+(?:[.@:/+-][\p{Letter}\p{Number}]+)*/gu;
+const DIACRITIC_PATTERN = /\p{Mark}+/gu;
 
-export type DetectedRelationship = {
-  targetId: string;
-  relationType: RelationType;
-  confidence: number;
-};
-
-// ---------------------------------------------------------------------------
-// Pattern-based entity extraction
-// ---------------------------------------------------------------------------
-
-const PERSON_PATTERNS = [
-  /\b(?:my (?:friend|colleague|boss|partner|wife|husband|brother|sister|mom|dad|manager|coworker))\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/g,
-  /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:is my|told me|said|mentioned|works at|lives in)/g,
-  /\b(?:with|from|by)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/g,
-];
-
-const EMAIL_PATTERN = /[\w.-]+@[\w.-]+\.\w+/g;
-const PHONE_PATTERN = /\+?\d{10,}/g;
-const URL_PATTERN = /https?:\/\/[^\s<>]+/g;
-
-const PROJECT_PATTERNS = [
-  /\b(?:project|repo|repository|codebase|app|application|service)\s+["']?([A-Za-z][\w-]+)["']?/gi,
-  /\bworking on\s+["']?([A-Za-z][\w-]+)["']?/gi,
-];
-
-const TECH_PATTERNS = [
-  /\b(TypeScript|JavaScript|Python|Rust|Go|Java|C\+\+|React|Vue|Angular|Svelte|Node\.js|Deno|Bun|Docker|Kubernetes|PostgreSQL|MySQL|SQLite|Redis|MongoDB|GraphQL|REST|gRPC|AWS|Azure|GCP|Terraform|Ansible)\b/gi,
-];
-
-const PREFERENCE_PATTERNS = [
-  /\bi (?:prefer|like|love|enjoy|hate|dislike|want|need|always|never)\b/i,
-  /\bmy (?:preference|favorite|go-to|default)\b/i,
-];
-
-const DECISION_PATTERNS = [
-  /\b(?:decided|will use|going with|chose|switched to|moving to|adopted)\b/i,
-  /\blet's (?:use|go with|switch to|try)\b/i,
-];
-
-const TEMPORAL_PATTERNS: Array<{ pattern: RegExp; offsetMs: number }> = [
-  { pattern: /\btomorrow\b/i, offsetMs: 2 * 24 * 60 * 60 * 1000 },
-  { pattern: /\btonight\b/i, offsetMs: 24 * 60 * 60 * 1000 },
-  { pattern: /\btoday\b/i, offsetMs: 24 * 60 * 60 * 1000 },
-  { pattern: /\bthis week\b/i, offsetMs: 7 * 24 * 60 * 60 * 1000 },
-  { pattern: /\bnext week\b/i, offsetMs: 14 * 24 * 60 * 60 * 1000 },
-  { pattern: /\bthis month\b/i, offsetMs: 31 * 24 * 60 * 60 * 1000 },
-];
-
-const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
-const MONTH_NAMES: Record<string, number> = {
-  jan: 0, january: 0, feb: 1, february: 1, mar: 2, march: 2, apr: 3, april: 3,
-  may: 4, jun: 5, june: 5, jul: 6, july: 6, aug: 7, august: 7,
-  sep: 8, september: 8, oct: 9, october: 9, nov: 10, november: 10, dec: 11, december: 11,
-};
-
-// ---------------------------------------------------------------------------
-// Entity extraction
-// ---------------------------------------------------------------------------
-
-export function extractEntities(text: string): ExtractedEntity[] {
-  const entities: ExtractedEntity[] = [];
-  const seen = new Set<string>();
-
-  function add(name: string, type: string) {
-    const key = `${type}:${name.toLowerCase()}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    entities.push({ name, type });
-  }
-
-  // People
-  for (const pattern of PERSON_PATTERNS) {
-    const regex = new RegExp(pattern.source, pattern.flags);
-    for (const match of text.matchAll(regex)) {
-      const name = match[1]?.trim();
-      if (name && name.length > 1 && name.length < 50) {
-        add(name, "person");
-      }
-    }
-  }
-
-  // Email addresses
-  for (const match of text.matchAll(EMAIL_PATTERN)) {
-    add(match[0], "email");
-  }
-
-  // Phone numbers
-  for (const match of text.matchAll(PHONE_PATTERN)) {
-    add(match[0], "phone");
-  }
-
-  // URLs
-  for (const match of text.matchAll(URL_PATTERN)) {
-    add(match[0], "url");
-  }
-
-  // Projects
-  for (const pattern of PROJECT_PATTERNS) {
-    const regex = new RegExp(pattern.source, pattern.flags);
-    for (const match of text.matchAll(regex)) {
-      const name = match[1]?.trim();
-      if (name && name.length > 1 && name.length < 50) {
-        add(name, "project");
-      }
-    }
-  }
-
-  // Technologies
-  for (const pattern of TECH_PATTERNS) {
-    const regex = new RegExp(pattern.source, pattern.flags);
-    for (const match of text.matchAll(regex)) {
-      add(match[1], "technology");
-    }
-  }
-
-  return entities;
-}
-
-// ---------------------------------------------------------------------------
-// Category & importance detection
-// ---------------------------------------------------------------------------
-
-export function detectCategory(text: string): MemoryCategory {
-  if (PREFERENCE_PATTERNS.some((p) => p.test(text))) return "preference";
-  if (DECISION_PATTERNS.some((p) => p.test(text))) return "decision";
-  if (EMAIL_PATTERN.test(text) || PHONE_PATTERN.test(text) || PERSON_PATTERNS.some((p) => new RegExp(p.source, p.flags).test(text))) return "entity";
-  if (PROJECT_PATTERNS.some((p) => new RegExp(p.source, p.flags).test(text))) return "project";
-  if (/\b(?:always|never|remember|rule|instruction|must|should)\b/i.test(text)) return "instruction";
-  if (/\b(?:is|are|has|have|was|were|does|did)\b/i.test(text)) return "fact";
-  return "other";
-}
-
-export function detectImportance(text: string, category: MemoryCategory): number {
-  let importance = 0.5;
-
-  // Explicit memory requests are high importance
-  if (/\b(?:remember|don't forget|important|critical|always|never)\b/i.test(text)) {
-    importance += 0.3;
-  }
-
-  // Category-based adjustments
-  if (category === "preference" || category === "decision") importance += 0.1;
-  if (category === "entity") importance += 0.15;
-  if (category === "instruction") importance += 0.2;
-
-  // Length-based: very short or very long → lower
-  if (text.length < 20) importance -= 0.1;
-  if (text.length > 1000) importance -= 0.05;
-
-  return Math.max(0, Math.min(1, importance));
-}
-
-// ---------------------------------------------------------------------------
-// Temporal expiration detection
-// ---------------------------------------------------------------------------
-
-export function detectExpiration(text: string, referenceTimeMs = Date.now()): number | null {
-  // 1. Relative patterns (tomorrow, this week, etc.)
-  for (const { pattern, offsetMs } of TEMPORAL_PATTERNS) {
-    if (pattern.test(text)) {
-      return referenceTimeMs + offsetMs;
-    }
-  }
-
-  // 2. "next Tuesday", "next Monday", etc.
-  const nextDayMatch = text.match(/\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
-  if (nextDayMatch) {
-    const targetDay = DAY_NAMES.indexOf(nextDayMatch[1].toLowerCase());
-    if (targetDay >= 0) {
-      const now = new Date(referenceTimeMs);
-      const currentDay = now.getDay();
-      let daysUntil = targetDay - currentDay;
-      if (daysUntil <= 0) daysUntil += 7;
-      daysUntil += 7; // "next" means the week after
-      return referenceTimeMs + daysUntil * 24 * 60 * 60 * 1000 + 24 * 60 * 60 * 1000;
-    }
-  }
-
-  // 3. Absolute dates: "January 15", "March 3rd", "Dec 25"
-  const absoluteDateMatch = text.match(
-    /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?\b/i,
-  );
-  if (absoluteDateMatch) {
-    const month = MONTH_NAMES[absoluteDateMatch[1].toLowerCase()];
-    const day = Number.parseInt(absoluteDateMatch[2], 10);
-    if (month !== undefined && day >= 1 && day <= 31) {
-      const now = new Date(referenceTimeMs);
-      let year = now.getFullYear();
-      const target = new Date(year, month, day, 23, 59, 59);
-      if (target.getTime() < referenceTimeMs) {
-        target.setFullYear(year + 1);
-      }
-      return target.getTime();
-    }
-  }
-
-  // 4. ISO-like dates: "2026-04-15", "04/15"
-  const isoMatch = text.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
-  if (isoMatch) {
-    const target = new Date(
-      Number.parseInt(isoMatch[1], 10),
-      Number.parseInt(isoMatch[2], 10) - 1,
-      Number.parseInt(isoMatch[3], 10),
-      23, 59, 59,
-    );
-    if (!Number.isNaN(target.getTime())) return target.getTime();
-  }
-
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// Full extraction pipeline
-// ---------------------------------------------------------------------------
-
-export function extractMemoryInfo(
-  text: string,
-  options?: { referenceTimeMs?: number },
-): ExtractedMemoryInfo {
-  const entities = extractEntities(text);
-  const category = detectCategory(text);
-  const importance = detectImportance(text, category);
-  const expiresAt = detectExpiration(text, options?.referenceTimeMs);
-
-  return { category, importance, entities, expiresAt };
-}
-
-// ---------------------------------------------------------------------------
-// Relationship detection
-// ---------------------------------------------------------------------------
-
-const CONTRADICTION_INDICATORS = [
-  /\b(?:actually|no longer|not anymore|changed|moved|switched|left|quit|stopped)\b/i,
-  /\b(?:instead|rather than|but now|now (?:i|we|he|she|they))\b/i,
-];
-
-const EXTENSION_INDICATORS = [
-  /\b(?:also|additionally|moreover|furthermore|plus|and|as well)\b/i,
-  /\b(?:specifically|in particular|for example|such as)\b/i,
-];
-
-export async function detectRelationships(
-  newMemory: MemoryRow,
-  db: MemoryDB,
-  _embeddings: EmbeddingProvider,
-): Promise<DetectedRelationship[]> {
-  const relationships: DetectedRelationship[] = [];
-  const seenTargets = new Set<string>();
-
-  // Get entities from new memory
-  const newEntities = extractEntities(newMemory.text);
-  if (newEntities.length === 0) return relationships;
-
-  // Find existing memories that share entities
-  for (const entity of newEntities) {
-    const existingEntity = db.findEntityByName(entity.name);
-    if (!existingEntity) continue;
-
-    const relatedMemories = db.getMemoriesForEntity(existingEntity.id);
-    for (const existing of relatedMemories) {
-      if (existing.id === newMemory.id || seenTargets.has(existing.id)) continue;
-
-      if (!newMemory.vector || !existing.vector) continue;
-      const similarity = cosineSimilarity(newMemory.vector, existing.vector);
-
-      // Check if new memory contradicts/updates existing
-      const hasContradictionKeywords = CONTRADICTION_INDICATORS.some((p) => p.test(newMemory.text));
-
-      // Implicit update: very high similarity between memories sharing an entity
-      // suggests the new fact replaces the old one (even without explicit contradiction words)
-      if (hasContradictionKeywords && similarity > 0.5) {
-        relationships.push({
-          targetId: existing.id,
-          relationType: "updates",
-          confidence: Math.min(1, similarity + 0.2),
-        });
-        seenTargets.add(existing.id);
-        continue;
-      }
-
-      // Semantic-only update detection: if two facts about the same entity
-      // are very similar (>0.7), the newer one likely supersedes the older
-      if (similarity > 0.7) {
-        relationships.push({
-          targetId: existing.id,
-          relationType: "updates",
-          confidence: similarity,
-        });
-        seenTargets.add(existing.id);
-        continue;
-      }
-
-      // Check if new memory extends existing
-      const isExtension = EXTENSION_INDICATORS.some((p) => p.test(newMemory.text));
-      if (isExtension && similarity > 0.4) {
-        relationships.push({
-          targetId: existing.id,
-          relationType: "extends",
-          confidence: similarity,
-        });
-        seenTargets.add(existing.id);
-        continue;
-      }
-
-      // Derive: moderate similarity between facts sharing an entity suggests a connection
-      if (similarity > 0.3 && similarity <= 0.7) {
-        relationships.push({
-          targetId: existing.id,
-          relationType: "derives",
-          confidence: similarity * 0.8,
-        });
-        seenTargets.add(existing.id);
-      }
-    }
-  }
-
-  return relationships;
-}
-
-// ---------------------------------------------------------------------------
-// Process new memory: extract, embed, store, link
-// ---------------------------------------------------------------------------
+const DEDUP_STOPWORDS = new Set<string>(
+  Object.values(stopwordsIso).flat()
+);
 
 export async function processNewMemory(
   text: string,
   db: MemoryDB,
   embeddings: EmbeddingProvider,
   options?: {
-    containerTag?: string;
-    categoryOverride?: MemoryCategory;
-    importanceOverride?: number;
-    isStatic?: boolean;
+    memoryTypeOverride?: MemoryType;
+    pinnedOverride?: boolean;
     createdAt?: number;
     updatedAt?: number;
     referenceTimeMs?: number;
+    semanticRuntime?: SemanticRuntimeLike | null;
+    log?: SemanticLogLike;
+    semanticMemory?: ExtractedMemoryCandidate | null;
   },
-): Promise<MemoryRow> {
-  const exactDuplicate = db.findExactMemory(text, options?.containerTag ?? "default");
+): Promise<MemoryRow | null> {
+  const cleanedText = prepareMemoryTextForStorage(text, MAX_MEMORY_TEXT_CHARS);
+  if (!cleanedText) return null;
+
+  const memoryType = options?.memoryTypeOverride ?? options?.semanticMemory?.memoryType ?? "fact";
+  const pinned = options?.pinnedOverride ?? false;
+  const expiresAt =
+    memoryType === "episode" ? parseExpiresAtIso(options?.semanticMemory?.expiresAtIso) : null;
+
+  const exactDuplicate = db.findExactMemory(cleanedText);
   if (exactDuplicate) {
-    db.bumpAccessCount(exactDuplicate.id);
-    return exactDuplicate;
+    return (
+      db.mergeDuplicateMemory({
+        id: exactDuplicate.id,
+        memoryTypeOverride: options?.memoryTypeOverride,
+        pinnedOverride: options?.pinnedOverride,
+        expiresAtOverride: memoryType === "episode" ? expiresAt : undefined,
+      }) ?? exactDuplicate
+    );
   }
 
-  const info = extractMemoryInfo(text, {
-    referenceTimeMs: options?.referenceTimeMs ?? options?.createdAt,
-  });
+  const lexicalDuplicate = findLexicalDuplicate(cleanedText, db);
+  if (lexicalDuplicate) {
+    return (
+      db.mergeDuplicateMemory({
+        id: lexicalDuplicate.id,
+        memoryTypeOverride: options?.memoryTypeOverride,
+        pinnedOverride: options?.pinnedOverride,
+        expiresAtOverride: memoryType === "episode" ? expiresAt : undefined,
+      }) ?? lexicalDuplicate
+    );
+  }
 
-  // Embed
-  const vector = await embeddings.embed(text);
-
-  // Check for near-duplicates
-  const duplicates = db.vectorSearch(vector, 1, 0.95);
-  if (duplicates.length > 0) {
-    const existing = db.getMemory(duplicates[0].id);
-    if (existing) {
-      db.bumpAccessCount(existing.id);
-      return existing;
+  let vector: Float64Array | undefined;
+  try {
+    vector = await embeddings.embed(cleanedText);
+    const nearDuplicate = findNearDuplicate(vector, db);
+    if (nearDuplicate) {
+      db.bumpAccessCount(nearDuplicate.id);
+      return nearDuplicate;
     }
+  } catch (err) {
+    options?.log?.warn?.(`memory-supermemory: embedding unavailable during dedup/store: ${String(err)}`);
   }
 
-  // Store memory
   const memory = db.storeMemory({
-    text,
+    text: cleanedText,
     vector,
-    importance: options?.importanceOverride ?? info.importance,
-    category: options?.categoryOverride ?? info.category,
-    containerTag: options?.containerTag,
-    expiresAt: info.expiresAt,
-    isStatic: options?.isStatic,
+    memoryType,
+    expiresAt,
+    pinned,
     createdAt: options?.createdAt,
     updatedAt: options?.updatedAt,
   });
 
-  // Link entities
-  for (const entity of info.entities) {
-    const entityRow = db.upsertEntity(entity.name, entity.type);
-    db.linkEntityToMemory(memory.id, entityRow.id);
+  const mentions = collectEntityMentions(cleanedText, options?.semanticMemory?.entities ?? []);
+  for (const mention of mentions) {
+    const normalized = normalizeEntityAliasText(mention.mention);
+    if (!normalized) continue;
+    const resolved = db.resolveEntityAlias(mention.mention, normalized, mention.kind);
+    db.linkAliasToMemory(memory.id, resolved.alias.id);
   }
 
-  // Detect and record relationships
-  const relationships = await detectRelationships(memory, db, embeddings);
-  let parentMemoryId: string | null = null;
-  for (const rel of relationships) {
-    db.addRelationship(memory.id, rel.targetId, rel.relationType, rel.confidence);
-    // Track the first "updates" target as the parent for version chaining
-    if (rel.relationType === "updates" && !parentMemoryId) {
-      parentMemoryId = rel.targetId;
-    }
-  }
-
-  // Set parent_memory_id for version chaining if an update was detected
+  const parentMemoryId = await resolveUpdateRelationship(
+    memory,
+    db,
+    options?.semanticRuntime ?? null,
+    options?.log,
+  );
   if (parentMemoryId) {
     try {
       db.setParentMemoryId(memory.id, parentMemoryId);
     } catch {
-      // non-critical — version chain is advisory
+      // best-effort metadata only
     }
   }
 
+  addDeterministicRelatedEdges(memory, db, parentMemoryId ? new Set([parentMemoryId]) : new Set());
   return memory;
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+function collectEntityMentions(
+  _text: string,
+  extracted: ExtractedEntityMention[],
+): ExtractedEntityMention[] {
+  const merged = new Map<string, ExtractedEntityMention>();
 
-function cosineSimilarity(a: Float64Array, b: Float64Array): number {
-  if (a.length !== b.length) return 0;
-  let dot = 0;
-  let normA = 0;
-  let normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
+  function add(mention: string, kind: string | null): void {
+    const trimmed = mention.trim();
+    if (!trimmed) return;
+    const normalized = normalizeEntityAliasText(trimmed);
+    if (!normalized) return;
+
+    const existing = merged.get(normalized);
+    if (existing) {
+      if (!existing.kind && kind) {
+        existing.kind = kind;
+      }
+      return;
+    }
+
+    merged.set(normalized, {
+      mention: trimmed,
+      kind: kind ?? null,
+    });
   }
-  const denom = Math.sqrt(normA) * Math.sqrt(normB);
+
+  for (const entity of extracted) {
+    add(entity.mention, entity.kind);
+  }
+
+  return [...merged.values()];
+}
+
+function parseExpiresAtIso(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function findNearDuplicate(
+  vector: Float64Array,
+  db: MemoryDB,
+): MemoryRow | null {
+  const candidates = db.vectorSearch(vector, 4, NEAR_DUPLICATE_VECTOR_THRESHOLD);
+  const hydrated = db.getMemoriesByIds(candidates.map((candidate) => candidate.id));
+  return hydrated.find((candidate) => !candidate.is_superseded) ?? null;
+}
+
+function findLexicalDuplicate(
+  text: string,
+  db: MemoryDB,
+): MemoryRow | null {
+  const queryTerms = buildDedupQueryTerms(text);
+  if (queryTerms.length === 0) return null;
+
+  const candidates = db.getMemoriesByIds(
+    db.ftsSearch(queryTerms.join(" "), DEDUP_FTS_CANDIDATE_LIMIT).map((candidate) => candidate.id),
+  );
+
+  let bestCandidate: MemoryRow | null = null;
+  let bestScore = 0;
+  for (const candidate of candidates) {
+    const score = lexicalDuplicateScore(text, candidate.text);
+    if (score > bestScore) {
+      bestCandidate = candidate;
+      bestScore = score;
+    }
+  }
+
+  return bestScore >= LEXICAL_DUPLICATE_SCORE_THRESHOLD ? bestCandidate : null;
+}
+
+function buildDedupQueryTerms(text: string): string[] {
+  const tokens = tokenizeForDedup(text);
+  const contentTokens = tokens.filter(isContentToken);
+  const source = contentTokens.length >= 2 ? contentTokens : tokens;
+  return [...new Set(source)].sort((left, right) => right.length - left.length).slice(0, 8);
+}
+
+function lexicalDuplicateScore(left: string, right: string): number {
+  const leftTokens = tokenizeForDedup(left);
+  const rightTokens = tokenizeForDedup(right);
+  if (leftTokens.length === 0 || rightTokens.length === 0) return 0;
+
+  const leftStructured = new Set(leftTokens.filter(isStructuredToken));
+  const rightStructured = new Set(rightTokens.filter(isStructuredToken));
+  if (
+    leftStructured.size > 0 &&
+    rightStructured.size > 0 &&
+    setDiceScore(leftStructured, rightStructured) < 1
+  ) {
+    return 0;
+  }
+
+  const leftContent = contentTokensForDedup(leftTokens);
+  const rightContent = contentTokensForDedup(rightTokens);
+  const contentContainment = setContainmentScore(new Set(leftContent), new Set(rightContent));
+  const tokenLcsScore =
+    longestCommonSubsequenceLength(leftTokens, rightTokens) /
+    Math.max(1, Math.min(leftTokens.length, rightTokens.length));
+  const charDice = charNgramDiceScore(
+    normalizeForDedup(left).replace(/\s+/g, " ").trim(),
+    normalizeForDedup(right).replace(/\s+/g, " ").trim(),
+    3,
+  );
+
+  return contentContainment * 0.55 + tokenLcsScore * 0.3 + charDice * 0.15;
+}
+
+function tokenizeForDedup(text: string): string[] {
+  return normalizeForDedup(text).match(DEDUP_TOKEN_PATTERN) ?? [];
+}
+
+function normalizeForDedup(text: string): string {
+  return text
+    .normalize("NFKD")
+    .replace(DIACRITIC_PATTERN, "")
+    .toLowerCase();
+}
+
+function contentTokensForDedup(tokens: string[]): string[] {
+  const content = tokens.filter(isContentToken);
+  return content.length > 0 ? content : tokens;
+}
+
+function isContentToken(token: string): boolean {
+  return isStructuredToken(token) || (token.length >= 3 && !DEDUP_STOPWORDS.has(token));
+}
+
+function isStructuredToken(token: string): boolean {
+  return /[@:/]|\d/.test(token);
+}
+
+function setContainmentScore(left: Set<string>, right: Set<string>): number {
+  if (left.size === 0 || right.size === 0) return 0;
+
+  let overlap = 0;
+  for (const token of left) {
+    if (right.has(token)) overlap += 1;
+  }
+
+  return overlap / Math.min(left.size, right.size);
+}
+
+function setDiceScore(left: Set<string>, right: Set<string>): number {
+  if (left.size === 0 && right.size === 0) return 1;
+  if (left.size === 0 || right.size === 0) return 0;
+
+  let overlap = 0;
+  for (const token of left) {
+    if (right.has(token)) overlap += 1;
+  }
+
+  return (2 * overlap) / (left.size + right.size);
+}
+
+function longestCommonSubsequenceLength(left: string[], right: string[]): number {
+  const widths = new Array(right.length + 1).fill(0);
+
+  for (let i = 1; i <= left.length; i++) {
+    let diagonal = 0;
+    for (let j = 1; j <= right.length; j++) {
+      const previous = widths[j];
+      if (left[i - 1] === right[j - 1]) {
+        widths[j] = diagonal + 1;
+      } else {
+        widths[j] = Math.max(widths[j], widths[j - 1]);
+      }
+      diagonal = previous;
+    }
+  }
+
+  return widths[right.length];
+}
+
+function charNgramDiceScore(left: string, right: string, size: number): number {
+  if (!left || !right) return 0;
+  if (left === right) return 1;
+
+  const leftShingles = buildCharNgrams(left, size);
+  const rightShingles = buildCharNgrams(right, size);
+  return setDiceScore(leftShingles, rightShingles);
+}
+
+function buildCharNgrams(text: string, size: number): Set<string> {
+  if (text.length <= size) return new Set([text]);
+
+  const grams = new Set<string>();
+  for (let i = 0; i <= text.length - size; i++) {
+    grams.add(text.slice(i, i + size));
+  }
+  return grams;
+}
+
+async function resolveUpdateRelationship(
+  memory: MemoryRow,
+  db: MemoryDB,
+  semanticRuntime: SemanticRuntimeLike | null,
+  log?: SemanticLogLike,
+): Promise<string | null> {
+  if (!semanticRuntime || !log) return null;
+  if (memory.memory_type === "episode") return null;
+
+  const entityIds = db.getCanonicalEntityIdsForMemory(memory.id);
+  const candidates = buildUpdateCandidates(memory, entityIds, db);
+  if (candidates.length === 0) return null;
+
+  const decisions = await resolveMemoryRelationships(
+    {
+      text: memory.text,
+      memoryType: memory.memory_type,
+      entityIds,
+    },
+    candidates,
+    semanticRuntime,
+    log,
+  );
+
+  const updateDecision = decisions.find((decision) => decision.relationType === "updates");
+  if (!updateDecision) return null;
+
+  db.addRelationship(memory.id, updateDecision.targetId, "updates");
+  return updateDecision.targetId;
+}
+
+function buildUpdateCandidates(
+  memory: MemoryRow,
+  entityIds: string[],
+  db: MemoryDB,
+): UpdateResolverCandidate[] {
+  const candidateMap = new Map<
+    string,
+    { memory: MemoryRow; sharedEntityCount: number; vectorScore: number }
+  >();
+
+  function upsertCandidate(candidate: MemoryRow, options?: { sharedEntity?: boolean; vectorScore?: number }) {
+    if (candidate.id === memory.id) return;
+    if (candidate.memory_type !== memory.memory_type) return;
+    if (candidate.is_superseded) return;
+
+    const existing = candidateMap.get(candidate.id);
+    if (existing) {
+      if (options?.sharedEntity) {
+        existing.sharedEntityCount += 1;
+      }
+      if (options?.vectorScore !== undefined) {
+        existing.vectorScore = Math.max(existing.vectorScore, options.vectorScore);
+      }
+      return;
+    }
+
+    candidateMap.set(candidate.id, {
+      memory: candidate,
+      sharedEntityCount: options?.sharedEntity ? 1 : 0,
+      vectorScore: options?.vectorScore ?? 0,
+    });
+  }
+
+  for (const entityId of entityIds) {
+    for (const candidate of db.getMemoriesForEntity(entityId)) {
+      upsertCandidate(candidate, { sharedEntity: true });
+    }
+  }
+
+  if (memory.vector) {
+    const vectorCandidates = db.vectorSearch(
+      memory.vector,
+      UPDATE_VECTOR_CANDIDATE_LIMIT * 2,
+      UPDATE_VECTOR_MIN_SCORE,
+    );
+    const hydrated = db.getMemoriesByIds(vectorCandidates.map((candidate) => candidate.id));
+    const byId = new Map(vectorCandidates.map((candidate) => [candidate.id, candidate.score]));
+    for (const candidate of hydrated) {
+      upsertCandidate(candidate, { vectorScore: byId.get(candidate.id) ?? 0 });
+    }
+  }
+
+  return [...candidateMap.values()]
+    .sort((a, b) => {
+      if (a.sharedEntityCount !== b.sharedEntityCount) {
+        return b.sharedEntityCount - a.sharedEntityCount;
+      }
+      if (a.vectorScore !== b.vectorScore) {
+        return b.vectorScore - a.vectorScore;
+      }
+      return b.memory.created_at - a.memory.created_at;
+    })
+    .slice(0, UPDATE_RESOLVER_CANDIDATE_LIMIT)
+    .map((entry) => ({
+      id: entry.memory.id,
+      text: entry.memory.text,
+      memoryType: entry.memory.memory_type,
+      entityIds: db.getCanonicalEntityIdsForMemory(entry.memory.id),
+      createdAt: entry.memory.created_at,
+    }));
+}
+
+function addDeterministicRelatedEdges(
+  memory: MemoryRow,
+  db: MemoryDB,
+  excludedTargetIds: Set<string>,
+): void {
+  const entityIds = db.getCanonicalEntityIdsForMemory(memory.id);
+  if (entityIds.length === 0) return;
+
+  const candidateMap = new Map<string, { memory: MemoryRow; sharedEntityCount: number }>();
+
+  for (const entityId of entityIds) {
+    for (const candidate of db.getMemoriesForEntity(entityId)) {
+      if (candidate.id === memory.id) continue;
+      if (candidate.is_superseded) continue;
+      if (excludedTargetIds.has(candidate.id)) continue;
+
+      const existing = candidateMap.get(candidate.id);
+      if (existing) {
+        existing.sharedEntityCount += 1;
+      } else {
+        candidateMap.set(candidate.id, {
+          memory: candidate,
+          sharedEntityCount: 1,
+        });
+      }
+    }
+  }
+
+  for (const entry of [...candidateMap.values()]
+    .sort((a, b) => {
+      if (a.sharedEntityCount !== b.sharedEntityCount) {
+        return b.sharedEntityCount - a.sharedEntityCount;
+      }
+      return b.memory.created_at - a.memory.created_at;
+    })
+    .slice(0, MAX_RELATED_EDGES)) {
+    db.addRelationship(memory.id, entry.memory.id, "related");
+  }
+}
+
+export function buildEntityMergeCandidates(
+  entities: Array<{
+    id: string;
+    canonicalName: string;
+    aliases: string[];
+  }>,
+  embeddingsByEntityId: Map<string, Float64Array>,
+): Array<{
+  leftEntityId: string;
+  leftCanonicalName: string;
+  leftAliases: string[];
+  rightEntityId: string;
+  rightCanonicalName: string;
+  rightAliases: string[];
+}> {
+  const candidates: Array<{
+    leftEntityId: string;
+    leftCanonicalName: string;
+    leftAliases: string[];
+    rightEntityId: string;
+    rightCanonicalName: string;
+    rightAliases: string[];
+    score: number;
+  }> = [];
+
+  for (let i = 0; i < entities.length; i++) {
+    for (let j = i + 1; j < entities.length; j++) {
+      const left = entities[i];
+      const right = entities[j];
+      const stringScore = stringSimilarity(left.canonicalName, right.canonicalName);
+      const embeddingScore = cosineSimilarity(
+        embeddingsByEntityId.get(left.id) ?? null,
+        embeddingsByEntityId.get(right.id) ?? null,
+      );
+
+      if (stringScore < 0.74 && embeddingScore < 0.86) continue;
+
+      candidates.push({
+        leftEntityId: left.id,
+        leftCanonicalName: left.canonicalName,
+        leftAliases: left.aliases,
+        rightEntityId: right.id,
+        rightCanonicalName: right.canonicalName,
+        rightAliases: right.aliases,
+        score: Math.max(stringScore, embeddingScore),
+      });
+    }
+  }
+
+  return candidates
+    .sort((a, b) => b.score - a.score)
+    .map(({ score: _score, ...candidate }) => candidate);
+}
+
+function stringSimilarity(left: string, right: string): number {
+  const leftTokens = new Set(normalizeEntityAliasText(left).split(/\s+/).filter(Boolean));
+  const rightTokens = new Set(normalizeEntityAliasText(right).split(/\s+/).filter(Boolean));
+  if (leftTokens.size === 0 || rightTokens.size === 0) return 0;
+
+  let overlap = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) overlap += 1;
+  }
+
+  const jaccard = overlap / new Set([...leftTokens, ...rightTokens]).size;
+  const foldedEqual = foldForLooseComparison(left) === foldForLooseComparison(right) ? 1 : 0;
+  return Math.max(jaccard, foldedEqual);
+}
+
+function foldForLooseComparison(value: string): string {
+  return normalizeEntityAliasText(value)
+    .normalize("NFD")
+    .replace(/\p{Mark}+/gu, "");
+}
+
+function cosineSimilarity(left: Float64Array | null, right: Float64Array | null): number {
+  if (!left || !right || left.length !== right.length) return 0;
+  let dot = 0;
+  let leftNorm = 0;
+  let rightNorm = 0;
+  for (let i = 0; i < left.length; i++) {
+    dot += left[i] * right[i];
+    leftNorm += left[i] * left[i];
+    rightNorm += right[i] * right[i];
+  }
+  const denom = Math.sqrt(leftNorm) * Math.sqrt(rightNorm);
   return denom === 0 ? 0 : dot / denom;
+}
+
+export function formatEntityMergeInputs(
+  db: MemoryDB,
+  limit = 200,
+): Array<{
+  id: string;
+  canonicalName: string;
+  aliases: string[];
+}> {
+  return db.listCanonicalEntities(limit).map((entity) => ({
+    id: entity.id,
+    canonicalName: entity.canonical_name,
+    aliases: db.getAliasesForEntity(entity.id).map((alias) => alias.surface_text),
+  }));
+}
+
+export function getEntityIdsForMemoryMentions(mentions: MemoryEntityMentionRow[]): string[] {
+  return [...new Set(mentions.map((mention) => mention.entity_id))];
 }
