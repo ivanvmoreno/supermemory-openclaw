@@ -5,6 +5,7 @@ import { MemoryDB } from "./src/db.ts"
 import { createEmbeddingProvider } from "./src/embeddings.ts"
 import { ForgettingService } from "./src/forgetting.ts"
 import { createAutoCaptureHook, createAutoRecallHook } from "./src/hooks.ts"
+import { resolveSearchMode } from "./src/search.ts"
 import {
   createMemoryForgetTool,
   createMemoryProfileTool,
@@ -25,7 +26,9 @@ export default {
     const resolvedDbPath = api.resolvePath(cfg.dbPath)
     cfg.dbPath = resolvedDbPath
 
-    const vectorDims = vectorDimsForModel(cfg.embedding.model, cfg.embedding.dimensions)
+    const vectorDims = cfg.embedding.enabled
+      ? vectorDimsForModel(cfg.embedding.model, cfg.embedding.dimensions)
+      : 0
     const db = new MemoryDB(cfg, vectorDims)
     const embeddings = createEmbeddingProvider(cfg.embedding, vectorDims, db)
     const subagent = (api as unknown as { runtime?: { subagent?: unknown } }).runtime?.subagent ?? null
@@ -34,8 +37,10 @@ export default {
 
     api.logger.info(
       `memory-supermemory: initialized (db: ${resolvedDbPath}, ` +
-        `embedding: ${cfg.embedding.provider}/${cfg.embedding.model}, ` +
-        `vector: ${db.isVectorAvailable ? "yes" : "fts-only"})`,
+        (cfg.embedding.enabled
+          ? `embedding: ${cfg.embedding.provider}/${cfg.embedding.model}, `
+          : "embedding: disabled, ") +
+        `search: ${resolveSearchMode(cfg, db)})`,
     )
 
     // ====================================================================
@@ -52,10 +57,15 @@ export default {
       const lines: string[] = ["<supermemory-guidance>", "## Memory (Supermemory Graph)"]
 
       if (hasSearch) {
+        const searchMode = resolveSearchMode(cfg, db)
         lines.push(
           "Before answering questions about prior work, decisions, dates, people, preferences, " +
-            "or projects: use memory_search to recall relevant context. The search uses hybrid " +
-            "vector + keyword + graph retrieval for high recall accuracy.",
+            "or projects: use memory_search to recall relevant context. The search uses " +
+            (searchMode === "hybrid"
+              ? "vector + keyword + graph retrieval for high recall accuracy."
+              : searchMode === "fts+graph"
+                ? "keyword + graph retrieval."
+                : "keyword retrieval."),
         )
       }
 
@@ -141,6 +151,8 @@ export default {
             },
             status() {
               const stats = db.stats()
+              const vectorStats = db.getVectorBackfillStats()
+              const searchMode = resolveSearchMode(cfg, db)
               return {
                 backend: "builtin" as const,
                 provider: cfg.embedding.provider,
@@ -151,15 +163,17 @@ export default {
                 dbPath: resolvedDbPath,
                 sources: ["memory" as const],
                 vector: {
-                  enabled: true,
-                  available: db.isVectorAvailable,
-                  dims: vectorDims,
+                  enabled: cfg.embedding.enabled,
+                  available: cfg.embedding.enabled && db.isVectorAvailable,
+                  dims: cfg.embedding.enabled ? vectorDims : null,
+                  indexed: cfg.embedding.enabled ? vectorStats.indexed : 0,
+                  pendingBackfill: cfg.embedding.enabled ? vectorStats.pendingBackfill : 0,
                 },
                 custom: {
                   engine: "supermemory",
                   entities: stats.entities,
                   relationships: stats.relationships,
-                  searchMode: db.isVectorAvailable ? "hybrid" : "fts-only",
+                  searchMode,
                 },
               }
             },
@@ -167,6 +181,13 @@ export default {
               // No-op — supermemory captures memories via hooks/tools, not file sync
             },
             async probeEmbeddingAvailability() {
+              if (!cfg.embedding.enabled) {
+                return {
+                  ok: false,
+                  disabled: true,
+                  error: "Embeddings are disabled by configuration.",
+                }
+              }
               try {
                 await embeddings.embed("test")
                 return { ok: true }
@@ -178,7 +199,7 @@ export default {
               }
             },
             async probeVectorAvailability() {
-              return db.isVectorAvailable
+              return cfg.embedding.enabled && db.isVectorAvailable
             },
             async close() {
               db.close()

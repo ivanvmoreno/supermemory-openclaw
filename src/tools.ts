@@ -6,7 +6,7 @@ import { extractMemoryCandidates } from "./fact-extractor.ts";
 import { processNewMemory } from "./graph-engine.ts";
 import { getOrBuildProfile, type UserProfile } from "./profile-builder.ts";
 import type { SemanticLogger, SemanticSubagentRuntime } from "./semantic-runtime.ts";
-import { hybridSearch } from "./search.ts";
+import { hybridSearch, resolveSearchMode } from "./search.ts";
 
 // ---------------------------------------------------------------------------
 // Types matching OpenClaw tool shape
@@ -49,12 +49,18 @@ const FORGET_AUTO_DELETE_MIN_SCORE = 0.8;
 // ---------------------------------------------------------------------------
 
 export function createMemorySearchTool(ctx: ToolContext): ToolDefinition {
+  const searchMode = resolveSearchMode(ctx.cfg, ctx.db);
+  const description =
+    searchMode === "hybrid"
+      ? "Search long-term memory using vector + keyword + graph retrieval. Use when you need context about user preferences, facts, episodes, people, projects, or previous decisions."
+      : searchMode === "fts+graph"
+        ? "Search long-term memory using keyword + graph retrieval. Use when you need context about user preferences, facts, episodes, people, projects, or previous decisions."
+        : "Search long-term memory using keyword retrieval. Use when you need context about user preferences, facts, episodes, people, projects, or previous decisions.";
+
   return {
     name: "memory_search",
     label: "Memory Search",
-    description:
-      "Search long-term memory using hybrid vector + keyword + graph retrieval. " +
-      "Use when you need context about user preferences, facts, episodes, people, projects, or previous decisions.",
+    description,
     parameters: Type.Object({
       query: Type.String({ description: "Search query" }),
       limit: Type.Optional(
@@ -72,7 +78,7 @@ export function createMemorySearchTool(ctx: ToolContext): ToolDefinition {
       if (results.length === 0) {
         return {
           content: [{ type: "text", text: "No relevant memories found." }],
-          details: { count: 0 },
+          details: { count: 0, mode: resolveSearchMode(ctx.cfg, ctx.db) },
         };
       }
 
@@ -87,6 +93,7 @@ export function createMemorySearchTool(ctx: ToolContext): ToolDefinition {
         content: [{ type: "text", text: `Found ${results.length} memories:\n\n${text}` }],
         details: {
           count: results.length,
+          mode: resolveSearchMode(ctx.cfg, ctx.db),
           memories: results.map((result) => ({
             id: result.memory.id,
             text: result.memory.text,
@@ -138,6 +145,7 @@ export function createMemoryStoreTool(ctx: ToolContext): ToolDefinition {
 
         for (const candidate of extracted) {
           const memory = await processNewMemory(candidate.text, ctx.db, ctx.embeddings, {
+            embeddingEnabled: ctx.cfg.embedding.enabled,
             memoryTypeOverride: memoryType,
             pinnedOverride: pinned,
             semanticMemory: candidate,
@@ -152,6 +160,7 @@ export function createMemoryStoreTool(ctx: ToolContext): ToolDefinition {
 
       if (storedMemories.length === 0) {
         const fallback = await processNewMemory(text, ctx.db, ctx.embeddings, {
+          embeddingEnabled: ctx.cfg.embedding.enabled,
           memoryTypeOverride: memoryType,
           pinnedOverride: pinned,
           semanticRuntime: ctx.semanticRuntime ?? null,

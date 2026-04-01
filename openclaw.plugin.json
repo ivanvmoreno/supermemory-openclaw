@@ -9,6 +9,7 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "enabled": { "type": "boolean" },
           "provider": { "type": "string" },
           "model": { "type": "string" },
           "apiKey": { "type": "string" },
@@ -37,6 +38,10 @@
     }
   },
   "uiHints": {
+    "embedding.enabled": {
+      "label": "Enable Embeddings",
+      "help": "Enable vector embeddings for semantic search, vector deduplication, and background backfill"
+    },
     "embedding.provider": {
       "label": "Embedding Provider",
       "placeholder": "ollama",

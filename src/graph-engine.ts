@@ -35,6 +35,7 @@ export async function processNewMemory(
   db: MemoryDB,
   embeddings: EmbeddingProvider,
   options?: {
+    embeddingEnabled?: boolean;
     memoryTypeOverride?: MemoryType;
     pinnedOverride?: boolean;
     createdAt?: number;
@@ -78,15 +79,17 @@ export async function processNewMemory(
   }
 
   let vector: Float64Array | undefined;
-  try {
-    vector = await embeddings.embed(cleanedText);
-    const nearDuplicate = findNearDuplicate(vector, db);
-    if (nearDuplicate) {
-      db.bumpAccessCount(nearDuplicate.id);
-      return nearDuplicate;
+  if (options?.embeddingEnabled !== false) {
+    try {
+      vector = await embeddings.embed(cleanedText);
+      const nearDuplicate = findNearDuplicate(vector, db);
+      if (nearDuplicate) {
+        db.bumpAccessCount(nearDuplicate.id);
+        return nearDuplicate;
+      }
+    } catch (err) {
+      options?.log?.warn?.(`memory-supermemory: embedding unavailable during dedup/store: ${String(err)}`);
     }
-  } catch (err) {
-    options?.log?.warn?.(`memory-supermemory: embedding unavailable during dedup/store: ${String(err)}`);
   }
 
   const memory = db.storeMemory({

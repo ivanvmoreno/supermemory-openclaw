@@ -191,6 +191,7 @@ export function createAutoCaptureHook(
       for (const candidate of candidates) {
         try {
           const memory = await processNewMemory(candidate.text, db, embeddings, {
+            embeddingEnabled: cfg.embedding.enabled,
             semanticMemory: candidate,
             semanticRuntime: subagent,
             log,

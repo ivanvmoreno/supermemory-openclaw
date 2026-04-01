@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 export type EmbeddingConfig = {
+  enabled: boolean;
   provider: string;
   model: string;
   apiKey?: string;
@@ -106,6 +107,7 @@ export function parseSupermemoryConfig(value: unknown): SupermemoryConfig {
 
   const embeddingRaw = (cfg.embedding ?? {}) as Record<string, unknown>;
 
+  const enabled = embeddingRaw.enabled !== false;
   const provider =
     typeof embeddingRaw.provider === "string" ? embeddingRaw.provider : DEFAULT_EMBEDDING_PROVIDER;
   const model =
@@ -120,7 +122,7 @@ export function parseSupermemoryConfig(value: unknown): SupermemoryConfig {
   const dbPath = typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH;
 
   return {
-    embedding: { provider, model, apiKey, baseUrl, dimensions },
+    embedding: { enabled, provider, model, apiKey, baseUrl, dimensions },
     autoCapture: cfg.autoCapture !== false,
     autoRecall: cfg.autoRecall !== false,
     captureMode: cfg.captureMode === "off" ? "off" : "extract",

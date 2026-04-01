@@ -68,6 +68,13 @@ export type ProfileCacheRow = {
   updated_at: number;
 };
 
+export type VectorBackfillStats = {
+  indexed: number;
+  missingVectors: number;
+  missingIndexRows: number;
+  pendingBackfill: number;
+};
+
 const CURRENT_MEMORY_COLUMNS = [
   "id",
   "text",
@@ -164,11 +171,15 @@ export class MemoryDB {
     this.vectorDims = vectorDims;
     ensureDir(path.dirname(cfg.dbPath));
     const sqlite = requireNodeSqlite();
-    this.db = new sqlite.DatabaseSync(cfg.dbPath);
+    this.db = new sqlite.DatabaseSync(cfg.dbPath, { allowExtension: cfg.embedding.enabled });
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
     this.initSchema();
-    this.tryLoadVec();
+    if (cfg.embedding.enabled) {
+      this.tryLoadVec();
+    } else {
+      this.vecAvailable = false;
+    }
   }
 
   private initSchema(): void {
@@ -346,6 +357,24 @@ export class MemoryDB {
 
   private tryLoadVec(): void {
     try {
+      try {
+        let sqliteVec: { load: (db: DatabaseSync) => void };
+        try {
+          sqliteVec = esmRequire("sqlite-vec");
+        } catch {
+          // If not in plugin's node_modules, resolve from the host OpenClaw installation
+          // process.argv[1] points to the openclaw CLI executable entry point.
+          const hostRequire = createRequire(process.argv[1] || import.meta.url);
+          sqliteVec = hostRequire("sqlite-vec");
+        }
+        this.db.enableLoadExtension(true);
+        sqliteVec.load(this.db);
+        this.db.enableLoadExtension(false);
+      } catch {
+        // Ignore load error; fall back to trying to create the table
+        // in case vec0 is already available (e.g. statically linked)
+      }
+
       this.db.exec(`
         CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(
           id TEXT PRIMARY KEY,
@@ -360,6 +389,15 @@ export class MemoryDB {
 
   get isVectorAvailable(): boolean {
     return this.vecAvailable;
+  }
+
+  private upsertVectorIndex(id: string, vector: Float64Array): void {
+    if (!this.vecAvailable) return;
+
+    this.db.prepare("DELETE FROM memories_vec WHERE id = ?").run(id);
+    this.db
+      .prepare("INSERT INTO memories_vec (id, vector) VALUES (?, ?)")
+      .run(id, float64ToBlob(vector));
   }
 
   storeMemory(params: {
@@ -411,9 +449,7 @@ export class MemoryDB {
       );
 
     if (this.vecAvailable && params.vector) {
-      this.db
-        .prepare("INSERT INTO memories_vec (id, vector) VALUES (?, ?)")
-        .run(id, float64ToBlob(params.vector));
+      this.upsertVectorIndex(id, params.vector);
     }
 
     return {
@@ -537,6 +573,98 @@ export class MemoryDB {
          ORDER BY created_at DESC LIMIT ? OFFSET ?`;
     const rows = this.db.prepare(sql).all(limit, offset) as Record<string, unknown>[];
     return rows.map((row) => this.rowToMemory(row));
+  }
+
+  countActiveMemoriesMissingVectors(): number {
+    const row = this.db
+      .prepare("SELECT COUNT(*) as cnt FROM memories WHERE is_superseded = 0 AND vector IS NULL")
+      .get() as { cnt: number };
+    return row.cnt;
+  }
+
+  listActiveMemoriesMissingVectors(limit: number): Array<{ id: string; text: string }> {
+    return this.db
+      .prepare(
+        `SELECT id, text FROM memories
+         WHERE is_superseded = 0 AND vector IS NULL
+         ORDER BY created_at ASC
+         LIMIT ?`,
+      )
+      .all(limit) as Array<{ id: string; text: string }>;
+  }
+
+  countActiveIndexedMemories(): number {
+    if (!this.vecAvailable) return 0;
+
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) as cnt
+         FROM memories m
+         JOIN memories_vec v ON v.id = m.id
+         WHERE m.is_superseded = 0`,
+      )
+      .get() as { cnt: number };
+    return row.cnt;
+  }
+
+  countActiveMemoriesMissingVectorIndex(): number {
+    if (!this.vecAvailable) return 0;
+
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) as cnt
+         FROM memories m
+         LEFT JOIN memories_vec v ON v.id = m.id
+         WHERE m.is_superseded = 0
+           AND m.vector IS NOT NULL
+           AND v.id IS NULL`,
+      )
+      .get() as { cnt: number };
+    return row.cnt;
+  }
+
+  listActiveMemoriesMissingVectorIndex(limit: number): Array<{ id: string; vector: Float64Array }> {
+    if (!this.vecAvailable) return [];
+
+    const rows = this.db
+      .prepare(
+        `SELECT m.id, m.vector
+         FROM memories m
+         LEFT JOIN memories_vec v ON v.id = m.id
+         WHERE m.is_superseded = 0
+           AND m.vector IS NOT NULL
+           AND v.id IS NULL
+         ORDER BY m.created_at ASC
+         LIMIT ?`,
+      )
+      .all(limit) as Array<{ id: string; vector: Buffer | Uint8Array }>;
+
+    return rows.map((row) => ({
+      id: row.id,
+      vector: blobToFloat64(row.vector),
+    }));
+  }
+
+  upsertMemoryVector(id: string, vector: Float64Array): void {
+    this.db
+      .prepare("UPDATE memories SET vector = ? WHERE id = ?")
+      .run(float64ToBlob(vector), id);
+    this.upsertVectorIndex(id, vector);
+  }
+
+  upsertMemoryVectorIndex(id: string, vector: Float64Array): void {
+    this.upsertVectorIndex(id, vector);
+  }
+
+  getVectorBackfillStats(): VectorBackfillStats {
+    const missingVectors = this.countActiveMemoriesMissingVectors();
+    const missingIndexRows = this.countActiveMemoriesMissingVectorIndex();
+    return {
+      indexed: this.countActiveIndexedMemories(),
+      missingVectors,
+      missingIndexRows,
+      pendingBackfill: missingVectors + missingIndexRows,
+    };
   }
 
   vectorSearch(queryVector: Float64Array, limit: number, minScore: number): Array<{ id: string; score: number }> {
@@ -945,7 +1073,6 @@ export class MemoryDB {
     supersededMemories: number;
     entities: number;
     relationships: number;
-    vectorAvailable: boolean;
   } {
     const total = (this.db.prepare("SELECT COUNT(*) as cnt FROM memories").get() as { cnt: number }).cnt;
     const active = (
@@ -962,7 +1089,6 @@ export class MemoryDB {
       supersededMemories: total - active,
       entities,
       relationships,
-      vectorAvailable: this.vecAvailable,
     };
   }
 

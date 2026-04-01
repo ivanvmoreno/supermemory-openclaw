@@ -376,6 +376,7 @@ async function resolveEmbeddingConfig(
   sourceStateDir: string,
 ): Promise<EmbeddingConfig> {
   const raw = (sourcePluginConfig.embedding ?? {}) as Record<string, unknown>;
+  const enabled = raw.enabled !== false;
   const provider =
     (typeof raw.provider === "string" ? raw.provider : undefined) ??
     (await readOpenAiApiKey(sourceStateDir) ? "openai" : "ollama");
@@ -390,6 +391,16 @@ async function resolveEmbeddingConfig(
 
   if (provider === "ollama") {
     return {
+      enabled,
+      provider,
+      model,
+      baseUrl,
+    };
+  }
+
+  if (!enabled) {
+    return {
+      enabled,
       provider,
       model,
       baseUrl,
@@ -408,6 +419,7 @@ async function resolveEmbeddingConfig(
   }
 
   return {
+    enabled,
     provider,
     model,
     apiKey,

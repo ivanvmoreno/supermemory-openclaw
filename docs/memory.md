@@ -35,9 +35,9 @@ The cleaned text is sent to an LLM subagent (`fact-extractor.ts`) with a strict 
 Before storing a newly extracted memory (`graph-engine.ts`), the system performs deduplication checks:
 1.  **Exact Match**: It checks for an exact case-insensitive text match. If found, it merges metadata (bumping access counts, updating expiration) instead of creating a duplicate.
 2.  **Near Duplicate (Lexical Fallback)**: Before embedding, it runs an FTS-backed lexical dedup pass. Candidate memories are scored with accent-folded token containment, token-order overlap (LCS), and character trigram Dice similarity. This pass uses a multilingual stopword filter (`stopwords-iso`) covering over 55 languages to ensure the lexical scoring is based strictly on content tokens, correctly identifying true duplicates globally without being skewed by common grammatical words. This catches duplicates caused by punctuation, accent changes, or light wording edits even when embeddings are unavailable.
-3.  **Near Duplicate (Vector)**: If vector embeddings are available, it computes the embedding and performs a similarity search. If a memory has a cosine similarity >= `0.95` (`NEAR_DUPLICATE_VECTOR_THRESHOLD`), it is treated as a duplicate; its access count is bumped, and the new memory is discarded.
+3.  **Near Duplicate (Vector)**: If embeddings are enabled and vector search is available, it computes the embedding and performs a similarity search. If a memory has a cosine similarity >= `0.95` (`NEAR_DUPLICATE_VECTOR_THRESHOLD`), it is treated as a duplicate; its access count is bumped, and the new memory is discarded.
 
-If embedding generation fails, the memory is still stored without a vector instead of dropping the write entirely. Retrieval then falls back to keyword + graph search until vectors are available again.
+If embedding generation fails, the memory is still stored without a vector instead of dropping the write entirely. Retrieval then falls back to keyword + graph search until vectors are available again. If embeddings are explicitly disabled, the system skips vector generation entirely while preserving any previously stored vectors on disk.
 
 ### Entity Linking
 Mentions extracted by the LLM are normalized. The system checks the `entity_aliases` table. If the normalized text exists, the memory is linked to the existing alias and its canonical entity. If not, a new canonical entity and alias are created.
@@ -52,7 +52,7 @@ Finally, deterministic `related` edges are created for up to 5 older memories th
 
 ## 3. Retrieval & Hybrid Search
 
-The `memory_search` tool and the auto-recall hook utilize a hybrid search algorithm (`search.ts`) that combines Vector Similarity, Keyword Match (FTS5), and Graph Traversal.
+The `memory_search` tool and the auto-recall hook use a retrieval algorithm (`search.ts`) that combines Vector Similarity, Keyword Match (FTS5), and Graph Traversal when embeddings are enabled, and falls back to Keyword Match plus Graph Traversal when they are disabled.
 
 ### Scoring Algorithm
 The hybrid search assigns a combined score to each candidate memory based on configured weights (`vectorWeight`, `textWeight`, `graphWeight`):
@@ -61,7 +61,7 @@ The hybrid search assigns a combined score to each candidate memory based on con
 combinedScore = (vectorScore * vw + ftsScore * fw + graphScore * gw) / (vw + fw + gw)
 ```
 
-1.  **Vector Search (if available via `sqlite-vec`)**: Computes the query embedding and retrieves top results. Scores are normalized based on cosine distance.
+1.  **Vector Search**: When embeddings are enabled and `sqlite-vec` is available, the system computes the query embedding and retrieves top results. Scores are normalized based on cosine distance.
 2.  **FTS Search (Keyword)**: Uses SQLite FTS5 `MATCH`. Scores are normalized based on the absolute `rank` relative to the highest-ranked result.
 3.  **Graph Augmentation**: The system identifies the top "seed" memories from the combined Vector + FTS scores. It then traverses the `relationships` table up to 2 hops deep (`GRAPH_HOP_DEPTH`). Discovered related memories are assigned a `graphScore` (`0.5` if newly discovered, `0.3` if already found via FTS/Vector).
 
@@ -92,7 +92,7 @@ When a user sends a message:
 
 ## 5. Forgetting & Entity Merging
 
-The `ForgettingService` (`forgetting.ts`) runs periodically in the background to keep the database clean and organized.
+The `ForgettingService` (`forgetting.ts`) runs periodically in the background to keep the database clean and organized. When embeddings are enabled, it also performs a non-blocking vector backfill pass that restores vector coverage for older active memories after embeddings are re-enabled.
 
 ### 1. Hard Expiration
 Memories with an explicit `expires_at` timestamp (usually `episode`s extracted with an `expiresAtIso` by the LLM) are permanently deleted once the time passes.

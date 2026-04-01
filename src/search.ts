@@ -13,6 +13,8 @@ export type SearchResult = {
   graphHop?: number;
 };
 
+export type SearchMode = "hybrid" | "fts+graph" | "fts-only";
+
 export type SearchOptions = {
   maxResults?: number;
   minScore?: number;
@@ -27,6 +29,23 @@ const GRAPH_NEW_MEMORY_SCORE = 0.5;
 const GRAPH_EXISTING_MEMORY_SCORE = 0.3;
 const MMR_LAMBDA = 0.7;
 const MMR_SAME_SOURCE_PENALTY = 0.8;
+
+export function isVectorSearchActive(
+  cfg: SupermemoryConfig,
+  db: Pick<MemoryDB, "isVectorAvailable">,
+): boolean {
+  return cfg.embedding.enabled && db.isVectorAvailable && cfg.vectorWeight > 0;
+}
+
+export function resolveSearchMode(
+  cfg: SupermemoryConfig,
+  db: Pick<MemoryDB, "isVectorAvailable">,
+): SearchMode {
+  if (isVectorSearchActive(cfg, db)) {
+    return "hybrid";
+  }
+  return cfg.graphWeight > 0 ? "fts+graph" : "fts-only";
+}
 
 // ---------------------------------------------------------------------------
 // Hybrid search
@@ -55,7 +74,7 @@ export async function hybridSearch(
   }
 
   // 1. Vector search
-  if (db.isVectorAvailable) {
+  if (isVectorSearchActive(cfg, db)) {
     try {
       const queryVector = await embeddings.embed(query);
       const vectorResults = db.vectorSearch(

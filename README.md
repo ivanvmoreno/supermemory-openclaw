@@ -132,14 +132,13 @@ Active memories:     0
 Superseded memories: 0
 Entities:            0
 Relationships:       0
-Vector search:       unavailable
 ```
 
-Zero counts are normal on first run. `Vector search: unavailable` is expected — see [Vector Search](#vector-search) below.
+Zero counts are normal on first run.
 
 ## Embedding Providers
 
-You need an embedding provider for semantic search. Choose one:
+If embeddings are enabled, choose one of these providers for semantic search:
 
 ### OpenAI
 
@@ -205,7 +204,7 @@ The AI uses these tools autonomously:
 
 | Tool | Description |
 |------|-------------|
-| `memory_search` | Hybrid search across all memories (vector + keyword + graph) |
+| `memory_search` | Search across memories using vector + keyword + graph retrieval when embeddings are enabled, otherwise keyword + graph retrieval |
 | `memory_store` | Save information with automatic entity extraction and relationship detection |
 | `memory_forget` | Delete memories by ID or search query |
 | `memory_profile` | View/rebuild the automatically maintained user profile |
@@ -223,9 +222,13 @@ openclaw supermemory wipe --confirm     # Delete all memories
 
 ## Vector Search
 
-The plugin uses FTS5 keyword search + graph traversal by default. Vector similarity search requires `sqlite-vec`, which is bundled with OpenClaw's built-in memory system but not automatically available to external plugins.
+The plugin always uses FTS5 keyword search plus graph traversal. When embeddings are enabled, it also uses `sqlite-vec` for vector similarity search and vector-based deduplication.
 
-If your OpenClaw build includes `sqlite-vec`, the plugin will detect and use it automatically.
+Because `sqlite-vec` is bundled with OpenClaw's built-in memory system, the plugin automatically detects and loads the extension from the host environment when embeddings are enabled. This means vector similarity search is usually available out-of-the-box without requiring any additional installation or configuration.
+
+If you prefer to avoid embedding work entirely, set `embedding.enabled: false` in your configuration. That disables embedding generation, vector retrieval, and vector-based deduplication while preserving any existing stored vectors on disk.
+
+When you turn embeddings back on later, the plugin starts a background backfill. It reindexes any stored vectors first, then embeds older active memories that were captured while embeddings were disabled. Startup is not blocked while this runs.
 
 ## Configuration Reference
 
@@ -235,8 +238,9 @@ All settings are optional. The plugin now exposes only the operational knobs tha
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `embedding.provider` | string | `"openai"` | Embedding provider (`ollama`, `openai`, etc.) |
-| `embedding.model` | string | `"text-embedding-3-small"` | Embedding model name |
+| `embedding.enabled` | boolean | `true` | Enable or disable embedding generation, vector retrieval, and vector deduplication |
+| `embedding.provider` | string | `"ollama"` | Embedding provider (`ollama`, `openai`, etc.) |
+| `embedding.model` | string | `"nomic-embed-text"` | Embedding model name |
 | `embedding.apiKey` | string | — | API key (cloud providers only, supports `${ENV_VAR}` syntax) |
 | `embedding.baseUrl` | string | — | Custom API base URL |
 | `embedding.dimensions` | number | auto | Vector dimensions (auto-detected for known models) |
@@ -343,7 +347,7 @@ All data stored in a single SQLite database:
 - **relationships** — Graph edges (`updates` / `related`)
 - **profile_cache** — Cached long-term + recent user profile
 - **memories_fts** — FTS5 virtual table for keyword search
-- **memories_vec** — sqlite-vec virtual table for vector similarity (when available)
+- **memories_vec** — sqlite-vec virtual table for vector similarity (if enabled)
 
 ## 🧪 LongMemEval Integration
 

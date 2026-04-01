@@ -203,6 +203,16 @@ export function createEmbeddingProvider(
   vectorDims: number,
   db: MemoryDB,
 ): EmbeddingProvider {
+  if (!config.enabled) {
+    return {
+      providerId: "none",
+      modelId: "disabled",
+      dimensions: vectorDims,
+      async embed() { return new Float64Array(vectorDims); },
+      async embedBatch(texts) { return texts.map(() => new Float64Array(vectorDims)); }
+    };
+  }
+
   let inner: EmbeddingProvider;
 
   if (config.provider === "ollama") {

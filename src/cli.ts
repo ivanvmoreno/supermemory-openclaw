@@ -74,7 +74,6 @@ export function registerSupermemoryCli(
       console.log(`Superseded memories: ${stats.supersededMemories}`);
       console.log(`Entities:            ${stats.entities}`);
       console.log(`Relationships:       ${stats.relationships}`);
-      console.log(`Vector search:       ${stats.vectorAvailable ? "available" : "unavailable"}`);
     });
 
   mem

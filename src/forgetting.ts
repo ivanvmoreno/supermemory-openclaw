@@ -16,6 +16,8 @@ export type ForgetResult = {
 
 const ENTITY_MERGE_ENTITY_LIMIT = 120;
 const ENTITY_MERGE_PAIR_LIMIT = 24;
+const VECTOR_BACKFILL_BATCH_SIZE = 20;
+const VECTOR_BACKFILL_INTERVAL_MS = 1000;
 
 export function runForgettingCycle(db: MemoryDB, cfg: SupermemoryConfig): ForgetResult {
   const expiredCount = db.deleteExpiredMemories();
@@ -30,6 +32,7 @@ export function runForgettingCycle(db: MemoryDB, cfg: SupermemoryConfig): Forget
 
 export async function runEntityMergeCycle(
   db: MemoryDB,
+  cfg: SupermemoryConfig,
   embeddings: EmbeddingProvider,
   semanticRuntime: SemanticRuntimeLike | null,
   log: SemanticLogLike,
@@ -39,7 +42,10 @@ export async function runEntityMergeCycle(
   const entities = formatEntityMergeInputs(db, ENTITY_MERGE_ENTITY_LIMIT);
   if (entities.length < 2) return 0;
 
-  const vectors = await embeddings.embedBatch(entities.map((entity) => entity.canonicalName));
+  const vectors = cfg.embedding.enabled
+    ? await embeddings.embedBatch(entities.map((entity) => entity.canonicalName))
+    : entities.map(() => new Float64Array(embeddings.dimensions));
+
   const embeddingsByEntityId = new Map(
     entities.map((entity, index) => [entity.id, vectors[index]]),
   );
@@ -72,8 +78,11 @@ export async function runEntityMergeCycle(
 }
 
 export class ForgettingService {
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private maintenanceTimer: ReturnType<typeof setInterval> | null = null;
+  private backfillTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly intervalMs: number;
+  private maintenanceInFlight = false;
+  private backfillInFlight = false;
 
   constructor(
     private readonly db: MemoryDB,
@@ -88,27 +97,100 @@ export class ForgettingService {
   }
 
   start(): void {
-    if (this.timer) return;
+    if (this.maintenanceTimer) return;
 
-    void this.runCycle();
-    this.timer = setInterval(() => {
-      void this.runCycle();
+    void this.runMaintenanceCycle();
+    this.maintenanceTimer = setInterval(() => {
+      void this.runMaintenanceCycle();
     }, this.intervalMs);
+    this.scheduleVectorBackfill(0);
   }
 
   stop(): void {
-    if (!this.timer) return;
-    clearInterval(this.timer);
-    this.timer = null;
+    if (this.maintenanceTimer) {
+      clearInterval(this.maintenanceTimer);
+      this.maintenanceTimer = null;
+    }
+    if (this.backfillTimer) {
+      clearTimeout(this.backfillTimer);
+      this.backfillTimer = null;
+    }
   }
 
-  private async runCycle(): Promise<void> {
+  private scheduleVectorBackfill(delayMs = VECTOR_BACKFILL_INTERVAL_MS): void {
+    if (this.backfillTimer) return;
+    if (!this.cfg.embedding.enabled || !this.options?.embeddings) return;
+
+    this.backfillTimer = setTimeout(() => {
+      this.backfillTimer = null;
+      void this.runVectorBackfillCycle();
+    }, delayMs);
+  }
+
+  private async runVectorBackfillCycle(): Promise<void> {
+    if (this.backfillInFlight) return;
+    if (!this.cfg.embedding.enabled || !this.options?.embeddings) return;
+
+    this.backfillInFlight = true;
+    let shouldReschedule = false;
+
+    try {
+      let reindexed = 0;
+      if (this.db.isVectorAvailable) {
+        const missingIndexRows = this.db.listActiveMemoriesMissingVectorIndex(
+          VECTOR_BACKFILL_BATCH_SIZE,
+        );
+        for (const row of missingIndexRows) {
+          this.db.upsertMemoryVectorIndex(row.id, row.vector);
+          reindexed++;
+        }
+      }
+
+      let embedded = 0;
+      const missingVectors = this.db.listActiveMemoriesMissingVectors(
+        VECTOR_BACKFILL_BATCH_SIZE,
+      );
+      if (missingVectors.length > 0) {
+        const vectors = await this.options.embeddings.embedBatch(
+          missingVectors.map((memory) => memory.text),
+        );
+        for (let index = 0; index < missingVectors.length; index++) {
+          this.db.upsertMemoryVector(missingVectors[index].id, vectors[index]);
+          embedded++;
+        }
+      }
+
+      const stats = this.db.getVectorBackfillStats();
+      shouldReschedule = stats.pendingBackfill > 0;
+
+      if (reindexed > 0 || embedded > 0) {
+        this.log.info(
+          "memory-supermemory: vector backfill progressed " +
+            `(${reindexed} reindexed, ${embedded} embedded, ${stats.pendingBackfill} remaining)`,
+        );
+      }
+    } catch (err) {
+      shouldReschedule = true;
+      this.log.warn(`memory-supermemory: vector backfill failed: ${String(err)}`);
+    } finally {
+      this.backfillInFlight = false;
+      if (shouldReschedule) {
+        this.scheduleVectorBackfill();
+      }
+    }
+  }
+
+  private async runMaintenanceCycle(): Promise<void> {
+    if (this.maintenanceInFlight) return;
+
+    this.maintenanceInFlight = true;
     try {
       const forgetting = runForgettingCycle(this.db, this.cfg);
       const mergedCount =
         this.options?.embeddings
           ? await runEntityMergeCycle(
               this.db,
+              this.cfg,
               this.options.embeddings,
               this.options.semanticRuntime ?? null,
               this.log,
@@ -129,6 +211,8 @@ export class ForgettingService {
       }
     } catch (err) {
       this.log.warn(`memory-supermemory: maintenance cycle failed: ${String(err)}`);
+    } finally {
+      this.maintenanceInFlight = false;
     }
   }
 }
