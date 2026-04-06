@@ -1,5 +1,10 @@
 ﻿# 🧠 Supermemory OpenClaw Plugin
 
+[![CI](https://img.shields.io/github/actions/workflow/status/ivanvmoreno/supermemory-openclaw/ci.yml?branch=main&label=CI&logo=github)](https://github.com/ivanvmoreno/supermemory-openclaw/actions/workflows/ci.yml)
+[![npm downloads](https://img.shields.io/npm/dm/openclaw-memory-supermemory?logo=npm&label=downloads)](https://www.npmjs.com/package/openclaw-memory-supermemory)
+[![ClawHub](https://img.shields.io/badge/ClawHub-plugin-0ea5e9)](https://clawhub.ai/plugins/openclaw-memory-supermemory)
+[![OpenClaw >= 2026.4.5](https://img.shields.io/badge/OpenClaw-%3E%3D2026.4.5-0f766e)](https://clawhub.ai/plugins/openclaw-memory-supermemory)
+
 Local graph-based memory plugin for [OpenClaw](https://github.com/nichochar/openclaw) — inspired by [Supermemory](https://supermemory.ai). Runs entirely on your machine with no cloud dependencies.
 
 > **Disclaimer:** This is an independent project. It is not affiliated with, endorsed by, or maintained by the Supermemory team. The name reflects architectural inspiration, not a partnership.
@@ -25,7 +30,7 @@ openclaw plugins install openclaw-memory-supermemory
 
 ```bash
 openclaw supermemory configure
-``` ̰
+```
 
 ### Step 3: Restart OpenClaw
 
