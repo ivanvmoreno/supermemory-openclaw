@@ -17,8 +17,15 @@ declare module "openclaw/plugin-sdk" {
 		registerCli(handler: any, options?: any): void
 		registerService(service: any): void
 		on(event: string, handler: (...args: any[]) => any): void
-		registerMemoryPromptSection(builder: (params: { availableTools: Set<string>; citationsMode?: string }) => string[]): void
-		registerMemoryFlushPlan(resolver: (params: { cfg?: any; nowMs?: number }) => any | null): void
+		registerMemoryPromptSection(
+			builder: (params: {
+				availableTools: Set<string>
+				citationsMode?: string
+			}) => string[],
+		): void
+		registerMemoryFlushPlan(
+			resolver: (params: { cfg?: any; nowMs?: number }) => any | null,
+		): void
 		registerMemoryRuntime(runtime: any): void
 		registerMemoryEmbeddingProvider(adapter: any): void
 		runtime: {

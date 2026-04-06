@@ -1,71 +1,71 @@
 {
-  "name": "openclaw-memory-supermemory",
-  "version": "0.5.0",
-  "type": "module",
-  "description": "Local graph-based memory plugin for OpenClaw with entity extraction, user profiles, and automatic forgetting — inspired by Supermemory",
-  "license": "MIT",
-  "author": "",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/ivanvmoreno/supermemory-openclaw.git"
-  },
-  "bugs": {
-    "url": "https://github.com/ivanvmoreno/supermemory-openclaw/issues"
-  },
-  "homepage": "https://github.com/ivanvmoreno/supermemory-openclaw#readme",
-  "publishConfig": {
-    "registry": "https://registry.npmjs.org/"
-  },
-  "files": [
-    "index.ts",
-    "src/",
-    "openclaw.plugin.json"
-  ],
-  "keywords": [
-    "openclaw",
-    "openclaw-plugin",
-    "memory",
-    "graph-memory",
-    "supermemory",
-    "entity-extraction",
-    "knowledge-graph",
-    "local-ai"
-  ],
-  "dependencies": {
-    "@clack/prompts": "^1.0.1",
-    "@sinclair/typebox": "0.34.48",
-    "stopwords-iso": "^1.1.0"
-  },
-  "peerDependencies": {
-    "openclaw": ">=2026.3.26"
-  },
-  "peerDependenciesMeta": {
-    "openclaw": {
-      "optional": true
-    }
-  },
-  "devDependencies": {
-    "@types/node": "^22.0.0",
-    "typescript": "^5.9.3"
-  },
-  "scripts": {
-    "check-types": "tsc --noEmit",
-    "lint": "bunx @biomejs/biome ci .",
-    "lint:fix": "bunx @biomejs/biome check --write .",
-    "eval:longmemeval": "node --disable-warning=ExperimentalWarning --experimental-transform-types ./tests/integration/longmemeval/run.ts",
-    "test:integration:longmemeval": "node --disable-warning=ExperimentalWarning --experimental-transform-types ./tests/integration/longmemeval/run.ts",
-    "test": "echo 'no tests yet'",
-    "ci": "bun run check-types && bun run lint"
-  },
-  "openclaw": {
-    "extensions": [
-      "./index.ts"
-    ],
-    "compat": {
-      "pluginApi": ">=2026.3.26"
-    },
-    "build": {
-      "openclawVersion": "2026.3.26"
-    }
-  }
+	"name": "openclaw-memory-supermemory",
+	"version": "0.5.0",
+	"type": "module",
+	"description": "Local graph-based memory plugin for OpenClaw with entity extraction, user profiles, and automatic forgetting — inspired by Supermemory",
+	"license": "MIT",
+	"author": "",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/ivanvmoreno/supermemory-openclaw.git"
+	},
+	"bugs": {
+		"url": "https://github.com/ivanvmoreno/supermemory-openclaw/issues"
+	},
+	"homepage": "https://github.com/ivanvmoreno/supermemory-openclaw#readme",
+	"publishConfig": {
+		"registry": "https://registry.npmjs.org/"
+	},
+	"files": [
+		"index.ts",
+		"src/",
+		"openclaw.plugin.json"
+	],
+	"keywords": [
+		"openclaw",
+		"openclaw-plugin",
+		"memory",
+		"graph-memory",
+		"supermemory",
+		"entity-extraction",
+		"knowledge-graph",
+		"local-ai"
+	],
+	"dependencies": {
+		"@clack/prompts": "^1.0.1",
+		"@sinclair/typebox": "0.34.48",
+		"stopwords-iso": "^1.1.0"
+	},
+	"peerDependencies": {
+		"openclaw": ">=2026.3.26"
+	},
+	"peerDependenciesMeta": {
+		"openclaw": {
+			"optional": true
+		}
+	},
+	"devDependencies": {
+		"@types/node": "^22.0.0",
+		"typescript": "^5.9.3"
+	},
+	"scripts": {
+		"check-types": "tsc --noEmit",
+		"lint": "bunx @biomejs/biome ci .",
+		"lint:fix": "bunx @biomejs/biome check --write .",
+		"eval:longmemeval": "node --disable-warning=ExperimentalWarning --experimental-transform-types ./tests/integration/longmemeval/run.ts",
+		"test:integration:longmemeval": "node --disable-warning=ExperimentalWarning --experimental-transform-types ./tests/integration/longmemeval/run.ts",
+		"test": "echo 'no tests yet'",
+		"ci": "bun run check-types && bun run lint"
+	},
+	"openclaw": {
+		"extensions": [
+			"./index.ts"
+		],
+		"compat": {
+			"pluginApi": ">=2026.3.26"
+		},
+		"build": {
+			"openclawVersion": "2026.3.26"
+		}
+	}
 }

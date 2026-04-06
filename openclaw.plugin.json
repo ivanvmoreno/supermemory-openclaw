@@ -1,232 +1,244 @@
 {
-  "id": "openclaw-memory-supermemory",
-  "kind": "memory",
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {
-      "embedding": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "enabled": { "type": "boolean" },
-          "provider": { "type": "string" },
-          "model": { "type": "string" },
-          "apiKey": { "type": "string" },
-          "baseUrl": { "type": "string" },
-          "dimensions": { "type": "number" }
-        }
-      },
-      "autoCapture": { "type": "boolean" },
-      "captureMode": { "type": "string", "enum": ["extract", "off"] },
-      "autoRecall": { "type": "boolean" },
-      "profileFrequency": { "type": "number", "minimum": 1, "maximum": 1000 },
-      "maxLongTermItems": { "type": "number", "minimum": 1 },
-      "maxRecentItems": { "type": "number", "minimum": 1 },
-      "recentWindowDays": { "type": "number", "minimum": 1 },
-      "profileScanLimit": { "type": "number", "minimum": 1 },
-      "promptMemoryMaxChars": { "type": "number", "minimum": 20 },
-      "forgetExpiredIntervalMinutes": { "type": "number", "minimum": 1 },
-      "temporalDecayDays": { "type": "number", "minimum": 1 },
-      "maxRecallResults": { "type": "number", "minimum": 1, "maximum": 100 },
-      "vectorWeight": { "type": "number", "minimum": 0, "maximum": 1 },
-      "textWeight": { "type": "number", "minimum": 0, "maximum": 1 },
-      "graphWeight": { "type": "number", "minimum": 0, "maximum": 1 },
-      "dbPath": { "type": "string" },
-      "captureMaxChars": { "type": "number", "minimum": 100, "maximum": 10000 },
-      "debug": { "type": "boolean" },
-      "minScore": { "type": "number", "minimum": 0, "maximum": 1 },
-      "vectorMinScoreFactor": { "type": "number", "minimum": 0, "maximum": 1 },
-      "graphSeedLimit": { "type": "number", "minimum": 1, "maximum": 50 },
-      "graphHopDepth": { "type": "number", "minimum": 1, "maximum": 5 },
-      "mmrLambda": { "type": "number", "minimum": 0, "maximum": 1 },
-      "autoRecallMaxMemories": { "type": "number", "minimum": 1, "maximum": 50 },
-      "autoRecallMinScore": { "type": "number", "minimum": 0, "maximum": 1 },
-      "nearDuplicateThreshold": { "type": "number", "minimum": 0, "maximum": 1 },
-      "lexicalDuplicateThreshold": { "type": "number", "minimum": 0, "maximum": 1 },
-      "updateVectorMinScore": { "type": "number", "minimum": 0, "maximum": 1 },
-      "maxRelatedEdges": { "type": "number", "minimum": 0, "maximum": 20 },
-      "extractorMaxItems": { "type": "number", "minimum": 1, "maximum": 50 }
-    }
-  },
-  "uiHints": {
-    "embedding.enabled": {
-      "label": "Enable Embeddings",
-      "help": "Enable vector embeddings for semantic search, vector deduplication, and background backfill"
-    },
-    "embedding.provider": {
-      "label": "Embedding Provider",
-      "placeholder": "ollama",
-      "help": "Embedding provider: ollama, openai, gemini, etc."
-    },
-    "embedding.model": {
-      "label": "Embedding Model",
-      "placeholder": "nomic-embed-text",
-      "help": "Embedding model name"
-    },
-    "embedding.apiKey": {
-      "label": "API Key",
-      "sensitive": true,
-      "placeholder": "sk-...",
-      "help": "API key for cloud embedding providers"
-    },
-    "embedding.baseUrl": {
-      "label": "Base URL",
-      "placeholder": "http://localhost:11434/v1",
-      "help": "Custom API base URL for the embedding provider",
-      "advanced": true
-    },
-    "embedding.dimensions": {
-      "label": "Dimensions",
-      "help": "Embedding dimensions when they cannot be auto-detected",
-      "advanced": true
-    },
-    "autoCapture": {
-      "label": "Auto-Capture",
-      "help": "Automatically extract and store memories from conversations"
-    },
-    "captureMode": {
-      "label": "Capture Mode",
-      "help": "\"extract\" uses the LLM extractor. \"off\" disables auto-capture."
-    },
-    "autoRecall": {
-      "label": "Auto-Recall",
-      "help": "Automatically inject relevant memories and the cached profile into prompts"
-    },
-    "profileFrequency": {
-      "label": "Profile Rebuild Frequency",
-      "help": "Rebuild the cached profile every N interactions",
-      "advanced": true
-    },
-    "maxLongTermItems": {
-      "label": "Max Long-Term Items",
-      "help": "Maximum memories shown in the long-term profile section",
-      "advanced": true
-    },
-    "maxRecentItems": {
-      "label": "Max Recent Items",
-      "help": "Maximum memories shown in the recent profile section",
-      "advanced": true
-    },
-    "recentWindowDays": {
-      "label": "Recent Window Days",
-      "help": "How many days count as recent for episodic memories",
-      "advanced": true
-    },
-    "profileScanLimit": {
-      "label": "Profile Scan Limit",
-      "help": "Maximum active memories scanned when rebuilding the profile",
-      "advanced": true
-    },
-    "promptMemoryMaxChars": {
-      "label": "Prompt Memory Max Chars",
-      "help": "Maximum characters per memory when injecting profile or recall context",
-      "advanced": true
-    },
-    "forgetExpiredIntervalMinutes": {
-      "label": "Forgetting Interval",
-      "help": "Minutes between forgetting cleanup runs",
-      "advanced": true
-    },
-    "temporalDecayDays": {
-      "label": "Temporal Decay Days",
-      "help": "Days before stale unpinned episodic memories are removed",
-      "advanced": true
-    },
-    "maxRecallResults": {
-      "label": "Max Recall Results",
-      "help": "Default maximum results returned by memory search",
-      "advanced": true
-    },
-    "vectorWeight": {
-      "label": "Vector Weight",
-      "help": "Weight for vector similarity during hybrid search",
-      "advanced": true
-    },
-    "textWeight": {
-      "label": "Text Weight",
-      "help": "Weight for keyword search during hybrid search",
-      "advanced": true
-    },
-    "graphWeight": {
-      "label": "Graph Weight",
-      "help": "Weight for related-memory expansion during hybrid search",
-      "advanced": true
-    },
-    "dbPath": {
-      "label": "Database Path",
-      "placeholder": "~/.openclaw/memory/supermemory.db",
-      "advanced": true
-    },
-    "captureMaxChars": {
-      "label": "Capture Max Chars",
-      "help": "Maximum characters from the assembled turn sent to the extractor",
-      "advanced": true
-    },
-    "debug": {
-      "label": "Debug Logging",
-      "help": "Enable extra memory-plugin logging",
-      "advanced": true
-    },
-    "minScore": {
-      "label": "Min Score",
-      "help": "Minimum combined score for a result to be returned (0–1)",
-      "advanced": true
-    },
-    "vectorMinScoreFactor": {
-      "label": "Vector Min Score Factor",
-      "help": "Vector score floor as a fraction of minScore (0–1)",
-      "advanced": true
-    },
-    "graphSeedLimit": {
-      "label": "Graph Seed Limit",
-      "help": "Max top results used as seeds for graph hop expansion",
-      "advanced": true
-    },
-    "graphHopDepth": {
-      "label": "Graph Hop Depth",
-      "help": "Number of relationship hops followed during graph expansion (1–5)",
-      "advanced": true
-    },
-    "mmrLambda": {
-      "label": "MMR Lambda",
-      "help": "Maximal Marginal Relevance diversity weight (0 = pure diversity, 1 = pure relevance)",
-      "advanced": true
-    },
-    "autoRecallMaxMemories": {
-      "label": "Auto-Recall Max Memories",
-      "help": "Cap on how many memories are injected per auto-recall turn",
-      "advanced": true
-    },
-    "autoRecallMinScore": {
-      "label": "Auto-Recall Min Score",
-      "help": "Minimum score for a memory to be injected by auto-recall (0–1)",
-      "advanced": true
-    },
-    "nearDuplicateThreshold": {
-      "label": "Near-Duplicate Threshold",
-      "help": "Vector cosine similarity above which two memories are considered near-duplicates (0–1)",
-      "advanced": true
-    },
-    "lexicalDuplicateThreshold": {
-      "label": "Lexical Duplicate Threshold",
-      "help": "Normalized edit-distance similarity above which two memories are considered lexical duplicates (0–1)",
-      "advanced": true
-    },
-    "updateVectorMinScore": {
-      "label": "Update Vector Min Score",
-      "help": "Vector similarity threshold that triggers an update relationship instead of a new memory (0–1)",
-      "advanced": true
-    },
-    "maxRelatedEdges": {
-      "label": "Max Related Edges",
-      "help": "Maximum number of 'related' graph edges stored per memory (0–20)",
-      "advanced": true
-    },
-    "extractorMaxItems": {
-      "label": "Extractor Max Items",
-      "help": "Maximum memory candidates returned per LLM extraction pass (1–50)",
-      "advanced": true
-    }
-  }
+	"id": "openclaw-memory-supermemory",
+	"kind": "memory",
+	"configSchema": {
+		"type": "object",
+		"additionalProperties": false,
+		"properties": {
+			"embedding": {
+				"type": "object",
+				"additionalProperties": false,
+				"properties": {
+					"enabled": { "type": "boolean" },
+					"provider": { "type": "string" },
+					"model": { "type": "string" },
+					"apiKey": { "type": "string" },
+					"baseUrl": { "type": "string" },
+					"dimensions": { "type": "number" }
+				}
+			},
+			"autoCapture": { "type": "boolean" },
+			"captureMode": { "type": "string", "enum": ["extract", "off"] },
+			"autoRecall": { "type": "boolean" },
+			"profileFrequency": { "type": "number", "minimum": 1, "maximum": 1000 },
+			"maxLongTermItems": { "type": "number", "minimum": 1 },
+			"maxRecentItems": { "type": "number", "minimum": 1 },
+			"recentWindowDays": { "type": "number", "minimum": 1 },
+			"profileScanLimit": { "type": "number", "minimum": 1 },
+			"promptMemoryMaxChars": { "type": "number", "minimum": 20 },
+			"forgetExpiredIntervalMinutes": { "type": "number", "minimum": 1 },
+			"temporalDecayDays": { "type": "number", "minimum": 1 },
+			"maxRecallResults": { "type": "number", "minimum": 1, "maximum": 100 },
+			"vectorWeight": { "type": "number", "minimum": 0, "maximum": 1 },
+			"textWeight": { "type": "number", "minimum": 0, "maximum": 1 },
+			"graphWeight": { "type": "number", "minimum": 0, "maximum": 1 },
+			"dbPath": { "type": "string" },
+			"captureMaxChars": { "type": "number", "minimum": 100, "maximum": 10000 },
+			"debug": { "type": "boolean" },
+			"minScore": { "type": "number", "minimum": 0, "maximum": 1 },
+			"vectorMinScoreFactor": { "type": "number", "minimum": 0, "maximum": 1 },
+			"graphSeedLimit": { "type": "number", "minimum": 1, "maximum": 50 },
+			"graphHopDepth": { "type": "number", "minimum": 1, "maximum": 5 },
+			"mmrLambda": { "type": "number", "minimum": 0, "maximum": 1 },
+			"autoRecallMaxMemories": {
+				"type": "number",
+				"minimum": 1,
+				"maximum": 50
+			},
+			"autoRecallMinScore": { "type": "number", "minimum": 0, "maximum": 1 },
+			"nearDuplicateThreshold": {
+				"type": "number",
+				"minimum": 0,
+				"maximum": 1
+			},
+			"lexicalDuplicateThreshold": {
+				"type": "number",
+				"minimum": 0,
+				"maximum": 1
+			},
+			"updateVectorMinScore": { "type": "number", "minimum": 0, "maximum": 1 },
+			"maxRelatedEdges": { "type": "number", "minimum": 0, "maximum": 20 },
+			"extractorMaxItems": { "type": "number", "minimum": 1, "maximum": 50 }
+		}
+	},
+	"uiHints": {
+		"embedding.enabled": {
+			"label": "Enable Embeddings",
+			"help": "Enable vector embeddings for semantic search, vector deduplication, and background backfill"
+		},
+		"embedding.provider": {
+			"label": "Embedding Provider",
+			"placeholder": "ollama",
+			"help": "Embedding provider: ollama, openai, gemini, etc."
+		},
+		"embedding.model": {
+			"label": "Embedding Model",
+			"placeholder": "nomic-embed-text",
+			"help": "Embedding model name"
+		},
+		"embedding.apiKey": {
+			"label": "API Key",
+			"sensitive": true,
+			"placeholder": "sk-...",
+			"help": "API key for cloud embedding providers"
+		},
+		"embedding.baseUrl": {
+			"label": "Base URL",
+			"placeholder": "http://localhost:11434/v1",
+			"help": "Custom API base URL for the embedding provider",
+			"advanced": true
+		},
+		"embedding.dimensions": {
+			"label": "Dimensions",
+			"help": "Embedding dimensions when they cannot be auto-detected",
+			"advanced": true
+		},
+		"autoCapture": {
+			"label": "Auto-Capture",
+			"help": "Automatically extract and store memories from conversations"
+		},
+		"captureMode": {
+			"label": "Capture Mode",
+			"help": "\"extract\" uses the LLM extractor. \"off\" disables auto-capture."
+		},
+		"autoRecall": {
+			"label": "Auto-Recall",
+			"help": "Automatically inject relevant memories and the cached profile into prompts"
+		},
+		"profileFrequency": {
+			"label": "Profile Rebuild Frequency",
+			"help": "Rebuild the cached profile every N interactions",
+			"advanced": true
+		},
+		"maxLongTermItems": {
+			"label": "Max Long-Term Items",
+			"help": "Maximum memories shown in the long-term profile section",
+			"advanced": true
+		},
+		"maxRecentItems": {
+			"label": "Max Recent Items",
+			"help": "Maximum memories shown in the recent profile section",
+			"advanced": true
+		},
+		"recentWindowDays": {
+			"label": "Recent Window Days",
+			"help": "How many days count as recent for episodic memories",
+			"advanced": true
+		},
+		"profileScanLimit": {
+			"label": "Profile Scan Limit",
+			"help": "Maximum active memories scanned when rebuilding the profile",
+			"advanced": true
+		},
+		"promptMemoryMaxChars": {
+			"label": "Prompt Memory Max Chars",
+			"help": "Maximum characters per memory when injecting profile or recall context",
+			"advanced": true
+		},
+		"forgetExpiredIntervalMinutes": {
+			"label": "Forgetting Interval",
+			"help": "Minutes between forgetting cleanup runs",
+			"advanced": true
+		},
+		"temporalDecayDays": {
+			"label": "Temporal Decay Days",
+			"help": "Days before stale unpinned episodic memories are removed",
+			"advanced": true
+		},
+		"maxRecallResults": {
+			"label": "Max Recall Results",
+			"help": "Default maximum results returned by memory search",
+			"advanced": true
+		},
+		"vectorWeight": {
+			"label": "Vector Weight",
+			"help": "Weight for vector similarity during hybrid search",
+			"advanced": true
+		},
+		"textWeight": {
+			"label": "Text Weight",
+			"help": "Weight for keyword search during hybrid search",
+			"advanced": true
+		},
+		"graphWeight": {
+			"label": "Graph Weight",
+			"help": "Weight for related-memory expansion during hybrid search",
+			"advanced": true
+		},
+		"dbPath": {
+			"label": "Database Path",
+			"placeholder": "~/.openclaw/memory/supermemory.db",
+			"advanced": true
+		},
+		"captureMaxChars": {
+			"label": "Capture Max Chars",
+			"help": "Maximum characters from the assembled turn sent to the extractor",
+			"advanced": true
+		},
+		"debug": {
+			"label": "Debug Logging",
+			"help": "Enable extra memory-plugin logging",
+			"advanced": true
+		},
+		"minScore": {
+			"label": "Min Score",
+			"help": "Minimum combined score for a result to be returned (0–1)",
+			"advanced": true
+		},
+		"vectorMinScoreFactor": {
+			"label": "Vector Min Score Factor",
+			"help": "Vector score floor as a fraction of minScore (0–1)",
+			"advanced": true
+		},
+		"graphSeedLimit": {
+			"label": "Graph Seed Limit",
+			"help": "Max top results used as seeds for graph hop expansion",
+			"advanced": true
+		},
+		"graphHopDepth": {
+			"label": "Graph Hop Depth",
+			"help": "Number of relationship hops followed during graph expansion (1–5)",
+			"advanced": true
+		},
+		"mmrLambda": {
+			"label": "MMR Lambda",
+			"help": "Maximal Marginal Relevance diversity weight (0 = pure diversity, 1 = pure relevance)",
+			"advanced": true
+		},
+		"autoRecallMaxMemories": {
+			"label": "Auto-Recall Max Memories",
+			"help": "Cap on how many memories are injected per auto-recall turn",
+			"advanced": true
+		},
+		"autoRecallMinScore": {
+			"label": "Auto-Recall Min Score",
+			"help": "Minimum score for a memory to be injected by auto-recall (0–1)",
+			"advanced": true
+		},
+		"nearDuplicateThreshold": {
+			"label": "Near-Duplicate Threshold",
+			"help": "Vector cosine similarity above which two memories are considered near-duplicates (0–1)",
+			"advanced": true
+		},
+		"lexicalDuplicateThreshold": {
+			"label": "Lexical Duplicate Threshold",
+			"help": "Normalized edit-distance similarity above which two memories are considered lexical duplicates (0–1)",
+			"advanced": true
+		},
+		"updateVectorMinScore": {
+			"label": "Update Vector Min Score",
+			"help": "Vector similarity threshold that triggers an update relationship instead of a new memory (0–1)",
+			"advanced": true
+		},
+		"maxRelatedEdges": {
+			"label": "Max Related Edges",
+			"help": "Maximum number of 'related' graph edges stored per memory (0–20)",
+			"advanced": true
+		},
+		"extractorMaxItems": {
+			"label": "Extractor Max Items",
+			"help": "Maximum memory candidates returned per LLM extraction pass (1–50)",
+			"advanced": true
+		}
+	}
 }
