@@ -1,5 +1,10 @@
 import { homedir } from "node:os"
 import { join } from "node:path"
+import {
+	DEFAULT_EMBEDDING_PROVIDER,
+	getDefaultEmbeddingModelForProvider,
+	KNOWN_EMBEDDING_DIMENSIONS,
+} from "./embedding-catalog.ts"
 
 export type EmbeddingConfig = {
 	enabled: boolean
@@ -51,8 +56,6 @@ export type SupermemoryConfig = {
 	extractorMaxItems: number
 }
 
-const DEFAULT_EMBEDDING_PROVIDER = "ollama"
-const DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
 const DEFAULT_DB_PATH = join(homedir(), ".openclaw", "memory", "supermemory.db")
 const DEFAULT_PROFILE_FREQUENCY = 50
 const DEFAULT_MAX_LONG_TERM_ITEMS = 20
@@ -79,15 +82,6 @@ const DEFAULT_LEXICAL_DUPLICATE_THRESHOLD = 0.88
 const DEFAULT_UPDATE_VECTOR_MIN_SCORE = 0.55
 const DEFAULT_MAX_RELATED_EDGES = 5
 const DEFAULT_EXTRACTOR_MAX_ITEMS = 10
-
-const KNOWN_EMBEDDING_DIMENSIONS: Record<string, number> = {
-	"nomic-embed-text": 768,
-	"text-embedding-3-small": 1536,
-	"text-embedding-3-large": 3072,
-	"mxbai-embed-large": 1024,
-	"all-minilm": 384,
-	"snowflake-arctic-embed": 1024,
-}
 
 export function vectorDimsForModel(model: string, explicit?: number): number {
 	if (explicit && explicit > 0) return explicit
@@ -187,7 +181,7 @@ export function parseSupermemoryConfig(value: unknown): SupermemoryConfig {
 	const model =
 		typeof embeddingRaw.model === "string"
 			? embeddingRaw.model
-			: DEFAULT_EMBEDDING_MODEL
+			: getDefaultEmbeddingModelForProvider(provider)
 	const apiKey =
 		typeof embeddingRaw.apiKey === "string"
 			? resolveEnvVars(embeddingRaw.apiKey)

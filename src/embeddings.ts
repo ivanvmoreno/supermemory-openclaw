@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto"
 import type { EmbeddingConfig } from "./config.ts"
 import type { MemoryDB } from "./db.ts"
+import {
+	DEFAULT_OLLAMA_BASE_URL,
+	DEFAULT_OPENAI_BASE_URL,
+	isOllamaProvider,
+} from "./embedding-catalog.ts"
 
 export interface EmbeddingProvider {
 	embed(text: string): Promise<Float64Array>
@@ -23,7 +28,7 @@ class OllamaEmbeddingProvider implements EmbeddingProvider {
 	constructor(model: string, dims: number, baseUrl?: string) {
 		this.modelId = model
 		this.dimensions = dims
-		this.baseUrl = baseUrl ?? "http://localhost:11434"
+		this.baseUrl = baseUrl ?? DEFAULT_OLLAMA_BASE_URL
 	}
 
 	async embed(text: string): Promise<Float64Array> {
@@ -87,7 +92,7 @@ class OpenAICompatEmbeddingProvider implements EmbeddingProvider {
 		this.modelId = model
 		this.dimensions = dims
 		this.apiKey = apiKey
-		this.baseUrl = baseUrl ?? "https://api.openai.com/v1"
+		this.baseUrl = baseUrl ?? DEFAULT_OPENAI_BASE_URL
 	}
 
 	async embed(text: string): Promise<Float64Array> {
@@ -203,7 +208,7 @@ export function createEmbeddingProvider(
 
 	let inner: EmbeddingProvider
 
-	if (config.provider === "ollama") {
+	if (isOllamaProvider(config.provider)) {
 		inner = new OllamaEmbeddingProvider(
 			config.model,
 			vectorDims,

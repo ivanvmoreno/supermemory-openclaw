@@ -62,10 +62,16 @@ jobs:
           echo "No forbidden files found."
 
   quality-checks:
-    name: Type Check, Format & Lint
+    name: Type Check, Format, Lint & Pack
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          check-latest: true
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -85,3 +91,6 @@ jobs:
 
       - name: Run Biome CI (format & lint)
         run: biome ci .
+
+      - name: Validate npm package contents
+        run: npm run pack:check

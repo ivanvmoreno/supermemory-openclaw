@@ -104,10 +104,10 @@ jobs:
           npm version "$VERSION" --no-git-tag-version --allow-same-version
 
       - name: Check package contents
-        run: npm pack --dry-run
+        run: npm run pack:check
 
       - name: Publish to npm
-        run: npm publish
+        run: npm publish --cache ./.npm-cache
 
   github-release:
     name: Create GitHub Release
@@ -118,13 +118,22 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          check-latest: true
+
       - name: Build release archive
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          npm run pack --silent
           ARCHIVE="openclaw-memory-supermemory-${VERSION}.zip"
+          TARBALL="openclaw-memory-supermemory-${VERSION}.tgz"
           zip -r "$ARCHIVE" index.ts openclaw.plugin.json package.json README.md biome.json tsconfig.json src/
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          echo "TARBALL=$TARBALL" >> "$GITHUB_ENV"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
       - name: Create GitHub Release
@@ -132,4 +141,6 @@ jobs:
         with:
           name: "v${{ env.VERSION }}"
           generate_release_notes: true
-          files: ${{ env.ARCHIVE }}
+          files: |
+            ${{ env.ARCHIVE }}
+            ${{ env.TARBALL }}

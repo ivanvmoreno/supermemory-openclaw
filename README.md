@@ -44,6 +44,7 @@ Edit `~/.openclaw/openclaw.json` and add the plugin entry:
   }
 }
 ```
+
 ### Step 3: Restart OpenClaw
 
 Restart the OpenClaw gateway for the plugin to load.
@@ -79,8 +80,7 @@ Supported providers and auto-detected dimensions:
 | `all-minilm` | Ollama | 384 |
 | `snowflake-arctic-embed` | Ollama | 1024 |
 
-Set `provider` to `"ollama"` (default) or `"openai"`. Any OpenAI-compatible endpoint also works via `baseUrl`. For unlisted models, set `embedding.dimensions` explicitly.
-
+Set `provider` to `"ollama"` or `"openai"`. Any OpenAI-compatible endpoint also works via `baseUrl`. For unlisted models, set `embedding.dimensions` explicitly.
 
 ## AI Tools
 
@@ -103,7 +103,7 @@ openclaw supermemory search <query>     # Search memories
 openclaw supermemory search "<term>" --limit 5
 openclaw supermemory profile            # View user profile
 openclaw supermemory profile --rebuild  # Force rebuild profile
-openclaw supermemory wipe --confirm     # Delete all memories
+openclaw supermemory wipe --confirm     # Wipe persisted memory data and re-initialize storage
 ```
 
 ### Interactive Setup
@@ -116,6 +116,8 @@ Run `openclaw supermemory configure` for a guided wizard that reads your existin
 - Custom database path
 
 Run `openclaw supermemory status` at any time to print a summary of the current configuration.
+
+Run `openclaw supermemory wipe --confirm` to wipe the SQLite memory store and re-initialize an empty database without changing your saved plugin configuration.
 
 ## Slash Commands
 
@@ -210,12 +212,14 @@ The plugin uses your configured LLM to extract typed atomic memories, raw entity
 > "Caught up with Iván today. He's working at Santander as an AI Scientist now, doing research on knowledge graphs. He lives in Madrid and mentioned a deadline next Tuesday for a paper submission."
 
 **Extracted memories:**
+
 - `fact`: Iván works at Santander as an AI Scientist
 - `fact`: Iván researches knowledge graphs
 - `fact`: Iván lives in Madrid
 - `episode`: Iván has a paper submission deadline next Tuesday
 
 Each extracted memory is stored separately with:
+
 - a `memoryType` (`fact`, `preference`, or `episode`)
 - raw entity mentions such as `Iván`, `Santander`, and `Madrid`
 - optional temporal metadata such as `expiresAtIso`
@@ -270,7 +274,7 @@ All data stored in a single SQLite database:
 - **memories_fts** — FTS5 virtual table for keyword search
 - **memories_vec** — sqlite-vec virtual table for vector similarity (if enabled)
 
-## 🧪 LongMemEval Integration
+## LongMemEval Integration
 
 The repo includes a [LongMemEval](https://github.com/xiaowu0162/LongMemEval) runner that evaluates this plugin through a real local OpenClaw agent invocation while keeping benchmark state isolated from your normal `~/.openclaw` profile.
 
@@ -295,4 +299,3 @@ What the runner does:
 4. Imports each benchmark instance into a fresh plugin DB
 5. Asks the benchmark question through `openclaw agent --local`
 6. Writes a `predictions.jsonl` file plus a run summary JSON
-

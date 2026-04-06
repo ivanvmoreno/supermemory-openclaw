@@ -1,6 +1,7 @@
 .omx/
 node_modules/
 .tmp/
+.npm-cache/
 dist/
 .env
 .env.local

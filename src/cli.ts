@@ -2,7 +2,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk"
 import type { SupermemoryConfig } from "./config.ts"
 import type { ConfigDeps } from "./configure.ts"
 import { registerSupermemoryConfigure } from "./configure.ts"
-import type { MemoryDB } from "./db.ts"
+import { hardResetMemoryDb, type MemoryDB } from "./db.ts"
 import type { EmbeddingProvider } from "./embeddings.ts"
 import { processNewMemory } from "./graph-engine.ts"
 import type { PluginLogger } from "./logger.ts"
@@ -90,16 +90,22 @@ export function registerSupermemoryCli(
 
 	mem
 		.command("wipe")
-		.description("Delete all memories (requires confirmation)")
+		.description(
+			"Wipe all persisted memory data and re-initialize storage (requires confirmation)",
+		)
 		.option("--confirm", "Confirm deletion")
 		.action(async (opts: unknown) => {
 			const confirm = !!(opts as Record<string, boolean>).confirm
 			if (!confirm) {
-				console.log("Use --confirm to delete all memories.")
+				console.log(
+					"Use --confirm to wipe all persisted memory data and start from scratch.",
+				)
 				return
 			}
-			db.wipeAll()
-			console.log("All memories deleted.")
+			hardResetMemoryDb(cfg, embeddings.dimensions, db)
+			console.log(
+				"All persisted memory data wiped. Storage has been re-initialized.",
+			)
 		})
 
 	if (configDeps) {

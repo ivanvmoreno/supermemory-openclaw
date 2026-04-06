@@ -159,6 +159,22 @@ function blobToFloat64(buf: Buffer | Uint8Array): Float64Array {
 	return new Float64Array(ab)
 }
 
+const SQLITE_DB_RESET_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const
+
+export function hardResetMemoryDb(
+	cfg: SupermemoryConfig,
+	vectorDims: number,
+	currentDb?: { close: () => void } | null,
+): void {
+	currentDb?.close()
+	for (const suffix of SQLITE_DB_RESET_SUFFIXES) {
+		fs.rmSync(`${cfg.dbPath}${suffix}`, { force: true })
+	}
+
+	const freshDb = new MemoryDB(cfg, vectorDims)
+	freshDb.close()
+}
+
 export class MemoryDB {
 	private db: DatabaseSync
 	private vectorDims: number

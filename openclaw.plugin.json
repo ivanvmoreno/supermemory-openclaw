@@ -84,7 +84,7 @@
 		},
 		"embedding.baseUrl": {
 			"label": "Base URL",
-			"placeholder": "http://localhost:11434/v1",
+			"placeholder": "http://localhost:11434",
 			"help": "Custom API base URL for the embedding provider",
 			"advanced": true
 		},
