@@ -21,5 +21,11 @@ declare module "openclaw/plugin-sdk" {
 		registerMemoryFlushPlan(resolver: (params: { cfg?: any; nowMs?: number }) => any | null): void
 		registerMemoryRuntime(runtime: any): void
 		registerMemoryEmbeddingProvider(adapter: any): void
+		runtime: {
+			config: {
+				loadConfig: () => Record<string, unknown>
+				writeConfigFile: (cfg: Record<string, unknown>) => Promise<void>
+			}
+		}
 	}
 }

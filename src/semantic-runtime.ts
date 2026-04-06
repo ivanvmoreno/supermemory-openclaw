@@ -23,6 +23,7 @@ export type SemanticSubagentRuntime = {
 export type SemanticLogger = {
   info: (msg: string) => void;
   warn: (msg: string) => void;
+  debug?: (msg: string) => void;
 };
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -70,7 +71,6 @@ export async function runSubagentJsonTask(params: {
         deleteTranscript: true,
       });
     } catch {
-      // best-effort cleanup only
     }
   }
 }

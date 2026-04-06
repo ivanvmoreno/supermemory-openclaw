@@ -1,15 +1,12 @@
 import type { SupermemoryConfig } from "./config.ts";
 import type { MemoryDB, MemoryRow } from "./db.ts";
+import type { SemanticLogger } from "./semantic-runtime.ts";
 import {
   dedupeMemoryTexts,
   normalizeMemoryText,
   sanitizeMemoryTextForPrompt,
   isSyntheticMemoryText,
 } from "./memory-text.ts";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 export type UserProfile = {
   longTerm: string[];
@@ -19,11 +16,7 @@ export type UserProfile = {
 
 const PROFILE_REBUILD_MAX_AGE_MS = 60 * 60 * 1000;
 
-// ---------------------------------------------------------------------------
-// Profile builder
-// ---------------------------------------------------------------------------
-
-export function buildUserProfile(db: MemoryDB, cfg: SupermemoryConfig): UserProfile {
+export function buildUserProfile(db: MemoryDB, cfg: SupermemoryConfig, log?: SemanticLogger): UserProfile {
   const now = Date.now();
   const recentWindowMs = cfg.recentWindowDays * 24 * 60 * 60 * 1000;
   const allActive = prioritizePinned(db.listActiveMemories(cfg.profileScanLimit));
@@ -64,6 +57,7 @@ export function buildUserProfile(db: MemoryDB, cfg: SupermemoryConfig): UserProf
   db.setProfileCache("longTerm", longTerm);
   db.setProfileCache("recent", recent);
 
+  log?.debug?.(`profile built (lt=${longTerm.length}, recent=${recent.length}) from ${allActive.length} active memories`);
   return { longTerm, recent, updatedAt: now };
 }
 
@@ -91,13 +85,25 @@ export function shouldRebuildProfile(
   db: MemoryDB,
   cfg: SupermemoryConfig,
   interactionCount: number,
+  log?: SemanticLogger,
 ): boolean {
   const cached = getCachedProfile(db, cfg);
-  if (!cached) return true;
+  if (!cached) {
+    log?.debug?.("profile rebuild triggered (no cache)");
+    return true;
+  }
 
-  if (interactionCount > 0 && interactionCount % cfg.profileFrequency === 0) return true;
-  if (Date.now() - cached.updatedAt > PROFILE_REBUILD_MAX_AGE_MS) return true;
+  if (interactionCount > 0 && interactionCount % cfg.profileFrequency === 0) {
+    log?.debug?.(`profile rebuild triggered (frequency hit at interaction=${interactionCount})`);
+    return true;
+  }
+  const ageMs = Date.now() - cached.updatedAt;
+  if (ageMs > PROFILE_REBUILD_MAX_AGE_MS) {
+    log?.debug?.(`profile rebuild triggered (stale, age=${Math.round(ageMs / 1000)}s)`);
+    return true;
+  }
 
+  log?.debug?.(`profile cache hit (age=${Math.round(ageMs / 1000)}s, lt=${cached.longTerm.length}, recent=${cached.recent.length})`);
   return false;
 }
 
@@ -105,16 +111,13 @@ export function getOrBuildProfile(
   db: MemoryDB,
   cfg: SupermemoryConfig,
   interactionCount: number,
+  log?: SemanticLogger,
 ): UserProfile {
-  if (shouldRebuildProfile(db, cfg, interactionCount)) {
-    return buildUserProfile(db, cfg);
+  if (shouldRebuildProfile(db, cfg, interactionCount, log)) {
+    return buildUserProfile(db, cfg, log);
   }
-  return getCachedProfile(db, cfg) ?? buildUserProfile(db, cfg);
+  return getCachedProfile(db, cfg) ?? buildUserProfile(db, cfg, log);
 }
-
-// ---------------------------------------------------------------------------
-// Format for prompt injection
-// ---------------------------------------------------------------------------
 
 export function formatProfileForPrompt(
   profile: UserProfile,

@@ -32,6 +32,7 @@
     "local-ai"
   ],
   "dependencies": {
+    "@clack/prompts": "^1.0.1",
     "@sinclair/typebox": "0.34.48",
     "stopwords-iso": "^1.1.0"
   },

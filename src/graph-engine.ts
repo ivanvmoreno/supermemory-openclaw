@@ -1,4 +1,4 @@
-import type { MemoryType } from "./config.ts";
+import type { MemoryType, SupermemoryConfig } from "./config.ts";
 import type { MemoryDB, MemoryEntityMentionRow, MemoryRow } from "./db.ts";
 import { normalizeEntityAliasText } from "./entity-text.ts";
 import type { EmbeddingProvider } from "./embeddings.ts";
@@ -14,12 +14,8 @@ import { prepareMemoryTextForStorage } from "./memory-text.ts";
 
 const MAX_MEMORY_TEXT_CHARS = 2000;
 const DEDUP_FTS_CANDIDATE_LIMIT = 12;
-const LEXICAL_DUPLICATE_SCORE_THRESHOLD = 0.88;
-const NEAR_DUPLICATE_VECTOR_THRESHOLD = 0.95;
-const UPDATE_VECTOR_MIN_SCORE = 0.55;
 const UPDATE_VECTOR_CANDIDATE_LIMIT = 8;
 const UPDATE_RESOLVER_CANDIDATE_LIMIT = 12;
-const MAX_RELATED_EDGES = 5;
 
 import stopwordsIso from "stopwords-iso";
 
@@ -44,6 +40,7 @@ export async function processNewMemory(
     semanticRuntime?: SemanticRuntimeLike | null;
     log?: SemanticLogLike;
     semanticMemory?: ExtractedMemoryCandidate | null;
+    cfg?: SupermemoryConfig;
   },
 ): Promise<MemoryRow | null> {
   const cleanedText = prepareMemoryTextForStorage(text, MAX_MEMORY_TEXT_CHARS);
@@ -54,8 +51,11 @@ export async function processNewMemory(
   const expiresAt =
     memoryType === "episode" ? parseExpiresAtIso(options?.semanticMemory?.expiresAtIso) : null;
 
+  const log = options?.log;
+
   const exactDuplicate = db.findExactMemory(cleanedText);
   if (exactDuplicate) {
+    log?.debug?.(`exact duplicate → merging into ${exactDuplicate.id.slice(0, 8)}`);
     return (
       db.mergeDuplicateMemory({
         id: exactDuplicate.id,
@@ -66,8 +66,9 @@ export async function processNewMemory(
     );
   }
 
-  const lexicalDuplicate = findLexicalDuplicate(cleanedText, db);
+  const lexicalDuplicate = findLexicalDuplicate(cleanedText, db, options?.cfg);
   if (lexicalDuplicate) {
+    log?.debug?.(`lexical duplicate → merging into ${lexicalDuplicate.id.slice(0, 8)}`);
     return (
       db.mergeDuplicateMemory({
         id: lexicalDuplicate.id,
@@ -82,8 +83,9 @@ export async function processNewMemory(
   if (options?.embeddingEnabled !== false) {
     try {
       vector = await embeddings.embed(cleanedText);
-      const nearDuplicate = findNearDuplicate(vector, db);
+      const nearDuplicate = findNearDuplicate(vector, db, options?.cfg);
       if (nearDuplicate) {
+        log?.debug?.(`near-duplicate (vector) → bumping access on ${nearDuplicate.id.slice(0, 8)}`);
         db.bumpAccessCount(nearDuplicate.id);
         // Link any new entity mentions to the existing memory so the graph stays
         // complete even when a near-duplicate is detected and we return early.
@@ -100,7 +102,7 @@ export async function processNewMemory(
         return nearDuplicate;
       }
     } catch (err) {
-      options?.log?.warn?.(`memory-supermemory: embedding unavailable during dedup/store: ${String(err)}`);
+      log?.warn?.(`embedding unavailable during dedup/store: ${String(err)}`);
     }
   }
 
@@ -113,6 +115,9 @@ export async function processNewMemory(
     createdAt: options?.createdAt,
     updatedAt: options?.updatedAt,
   });
+  log?.debug?.(
+    `stored new memory ${memory.id.slice(0, 8)} [${memoryType}${pinned ? " pinned" : ""}] (${cleanedText.length} chars)`,
+  );
 
   const mentions = collectEntityMentions(cleanedText, options?.semanticMemory?.entities ?? []);
   for (const mention of mentions) {
@@ -121,22 +126,28 @@ export async function processNewMemory(
     const resolved = db.resolveEntityAlias(mention.mention, normalized, mention.kind);
     db.linkAliasToMemory(memory.id, resolved.alias.id);
   }
+  if (mentions.length > 0) {
+    log?.debug?.(
+      `linked ${mentions.length} entity mentions: ${mentions.map((m) => `"${m.mention}"${m.kind ? ` (${m.kind})` : ""}`).join(", ")}`,
+    );
+  }
 
   const parentMemoryId = await resolveUpdateRelationship(
     memory,
     db,
     options?.semanticRuntime ?? null,
-    options?.log,
+    log,
+    options?.cfg,
   );
   if (parentMemoryId) {
+    log?.debug?.(`update relationship → supersedes ${parentMemoryId.slice(0, 8)}`);
     try {
       db.setParentMemoryId(memory.id, parentMemoryId);
     } catch {
-      // best-effort metadata only
     }
   }
 
-  addDeterministicRelatedEdges(memory, db, parentMemoryId ? new Set([parentMemoryId]) : new Set());
+  addDeterministicRelatedEdges(memory, db, parentMemoryId ? new Set([parentMemoryId]) : new Set(), options?.cfg, log);
   return memory;
 }
 
@@ -182,8 +193,10 @@ function parseExpiresAtIso(value: string | null | undefined): number | null {
 function findNearDuplicate(
   vector: Float64Array,
   db: MemoryDB,
+  cfg?: SupermemoryConfig,
 ): MemoryRow | null {
-  const candidates = db.vectorSearch(vector, 4, NEAR_DUPLICATE_VECTOR_THRESHOLD);
+  const threshold = cfg?.nearDuplicateThreshold ?? 0.95;
+  const candidates = db.vectorSearch(vector, 4, threshold);
   const hydrated = db.getMemoriesByIds(candidates.map((candidate) => candidate.id));
   return hydrated.find((candidate) => !candidate.is_superseded) ?? null;
 }
@@ -191,7 +204,9 @@ function findNearDuplicate(
 function findLexicalDuplicate(
   text: string,
   db: MemoryDB,
+  cfg?: SupermemoryConfig,
 ): MemoryRow | null {
+  const threshold = cfg?.lexicalDuplicateThreshold ?? 0.88;
   const queryTerms = buildDedupQueryTerms(text);
   if (queryTerms.length === 0) return null;
 
@@ -209,7 +224,7 @@ function findLexicalDuplicate(
     }
   }
 
-  return bestScore >= LEXICAL_DUPLICATE_SCORE_THRESHOLD ? bestCandidate : null;
+  return bestScore >= threshold ? bestCandidate : null;
 }
 
 function buildDedupQueryTerms(text: string): string[] {
@@ -339,13 +354,14 @@ async function resolveUpdateRelationship(
   db: MemoryDB,
   semanticRuntime: SemanticRuntimeLike | null,
   log?: SemanticLogLike,
+  cfg?: SupermemoryConfig,
 ): Promise<string | null> {
   if (!semanticRuntime) return null;
   if (memory.memory_type === "episode") return null;
   const effectiveLog: SemanticLogLike = log ?? { info: () => {}, warn: () => {} };
 
   const entityIds = db.getCanonicalEntityIdsForMemory(memory.id);
-  const candidates = buildUpdateCandidates(memory, entityIds, db);
+  const candidates = buildUpdateCandidates(memory, entityIds, db, cfg);
   if (candidates.length === 0) return null;
 
   const decisions = await resolveMemoryRelationships(
@@ -370,7 +386,9 @@ function buildUpdateCandidates(
   memory: MemoryRow,
   entityIds: string[],
   db: MemoryDB,
+  cfg?: SupermemoryConfig,
 ): UpdateResolverCandidate[] {
+  const updateVectorMinScore = cfg?.updateVectorMinScore ?? 0.55;
   const candidateMap = new Map<
     string,
     { memory: MemoryRow; sharedEntityCount: number; vectorScore: number }
@@ -409,7 +427,7 @@ function buildUpdateCandidates(
     const vectorCandidates = db.vectorSearch(
       memory.vector,
       UPDATE_VECTOR_CANDIDATE_LIMIT * 2,
-      UPDATE_VECTOR_MIN_SCORE,
+      updateVectorMinScore,
     );
     const hydrated = db.getMemoriesByIds(vectorCandidates.map((candidate) => candidate.id));
     const byId = new Map(vectorCandidates.map((candidate) => [candidate.id, candidate.score]));
@@ -442,7 +460,10 @@ function addDeterministicRelatedEdges(
   memory: MemoryRow,
   db: MemoryDB,
   excludedTargetIds: Set<string>,
+  cfg?: SupermemoryConfig,
+  log?: SemanticLogLike,
 ): void {
+  const maxRelatedEdges = cfg?.maxRelatedEdges ?? 5;
   const entityIds = db.getCanonicalEntityIdsForMemory(memory.id);
   if (entityIds.length === 0) return;
 
@@ -466,6 +487,7 @@ function addDeterministicRelatedEdges(
     }
   }
 
+  let edgesAdded = 0;
   for (const entry of [...candidateMap.values()]
     .sort((a, b) => {
       if (a.sharedEntityCount !== b.sharedEntityCount) {
@@ -473,8 +495,12 @@ function addDeterministicRelatedEdges(
       }
       return b.memory.created_at - a.memory.created_at;
     })
-    .slice(0, MAX_RELATED_EDGES)) {
+    .slice(0, maxRelatedEdges)) {
     db.addRelationship(memory.id, entry.memory.id, "related");
+    edgesAdded++;
+  }
+  if (edgesAdded > 0) {
+    log?.debug?.(`added ${edgesAdded} related edges for ${memory.id.slice(0, 8)}`);
   }
 }
 

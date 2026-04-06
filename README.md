@@ -3,6 +3,7 @@
 Local graph-based memory plugin for [OpenClaw](https://github.com/nichochar/openclaw) — inspired by [Supermemory](https://supermemory.ai). Runs entirely on your machine with no cloud dependencies.
 
 > **Disclaimer:** This is an independent project. It is not affiliated with, endorsed by, or maintained by the Supermemory team. The name reflects architectural inspiration, not a partnership.
+
 ## How It Works
 
 - **Auto-capture** — After each AI response, an LLM subagent extracts typed atomic memories (facts, episodes, preferences) and raw entity mentions from the turn, deduplicates them lexically and by vector similarity, then stores them in a local SQLite knowledge graph.
@@ -10,39 +11,9 @@ Local graph-based memory plugin for [OpenClaw](https://github.com/nichochar/open
 - **Background maintenance** — A periodic job merges entity aliases (e.g. "Ivan" / "Iván"), expires stale episodic memories, and backfills any missing embeddings.
 - **Auto-recall** — Before each AI turn, hybrid search (BM25 + vector + graph hops) retrieves the most relevant memories and your user profile, which are injected into the prompt context.
 
-## Sequence Diagrams
+Sequence diagrams available in [`docs/diagrams/`](docs/diagrams/).
 
-### Memory Extraction & Storage
-
-Triggered by the `agent_end` lifecycle event after every AI response.
-
-[Full diagram](docs/diagrams/auto-capture.md)
-
-### Auto-Recall — Context Injection before each Turn
-
-Triggered by the `before_prompt_build` lifecycle event before every AI turn.
-
-[Full diagram](docs/diagrams/auto-recall.md)
-
-### memory_store Tool — Manual Memory Storage
-
-Called explicitly by the AI agent when it decides to save something.
-
-[Full diagram](docs/diagrams/memory-store-tool.md)
-
-### Hybrid Search — memory_search Tool & Auto-Recall Detail
-
-Used by both the `memory_search` tool and the auto-recall hook.
-
-[Full diagram](docs/diagrams/hybrid-search.md)
-
-### Background Maintenance — ForgettingService
-
-Runs on a periodic timer (default: every 60 minutes) independently of conversation activity.
-
-[Full diagram](docs/diagrams/forgetting-service.md)
-
-## 🚀 Quick Start
+## Quick Start
 
 ### Step 1: Install the plugin
 
@@ -52,26 +23,20 @@ openclaw plugins install openclaw-memory-supermemory
 
 ### Step 2: Configure OpenClaw
 
-Edit `~/.openclaw/openclaw.json` and add **both** the memory slot and the plugin entry:
+Edit `~/.openclaw/openclaw.json` and add the plugin entry:
 
 ```json5
 {
-  plugins: {
-    // REQUIRED: Assign this plugin to the memory slot
-    slots: {
-      memory: "openclaw-memory-supermemory"
-    },
-    // RECOMMENDED: Suppress the auto-load security warning
-    allow: ["openclaw-memory-supermemory"],
-    // Plugin configuration
-    entries: {
+  "plugins": {
+    "allow": ["openclaw-memory-supermemory"],
+    "entries": {
       "openclaw-memory-supermemory": {
-        enabled: true,
-        config: {
-          embedding: {
-            provider: "openai",
-            model: "text-embedding-3-small",
-            apiKey: "${OPENAI_API_KEY}"    // reads from env var
+        "enabled": true,
+        "config": {
+          "embedding": {
+            "provider": "openai",
+            "model": "text-embedding-3-small",
+            "apiKey": "${OPENAI_API_KEY}"
           }
         }
       }
@@ -79,9 +44,6 @@ Edit `~/.openclaw/openclaw.json` and add **both** the memory slot and the plugin
   }
 }
 ```
-
-> **Important:** The `slots.memory` line is required — without it, OpenClaw won't use the plugin even if it's installed.
-
 ### Step 3: Restart OpenClaw
 
 Restart the OpenClaw gateway for the plugin to load.
@@ -106,53 +68,7 @@ Zero counts are normal on first run.
 
 ## Embedding Providers
 
-If embeddings are enabled, choose one of these providers for semantic search:
-
-### OpenAI
-
-```json5
-embedding: {
-  provider: "openai",
-  model: "text-embedding-3-small",
-  apiKey: "${OPENAI_API_KEY}"
-}
-```
-
-Set the environment variable before starting OpenClaw:
-
-```bash
-export OPENAI_API_KEY="sk-..."
-```
-
-### Ollama
-
-Install [Ollama](https://ollama.ai) and pull a model:
-
-```bash
-ollama pull nomic-embed-text
-```
-
-```json5
-embedding: {
-  provider: "ollama",
-  model: "nomic-embed-text"
-}
-```
-
-### Other OpenAI-compatible providers
-
-Any provider with an OpenAI-compatible `/v1/embeddings` endpoint works:
-
-```json5
-embedding: {
-  provider: "openai",
-  model: "your-model-name",
-  apiKey: "${YOUR_API_KEY}",
-  baseUrl: "https://your-provider.com/v1"
-}
-```
-
-### Supported models (auto-detected dimensions)
+Supported providers and auto-detected dimensions:
 
 | Model | Provider | Dimensions |
 |-------|----------|-----------|
@@ -163,7 +79,7 @@ embedding: {
 | `all-minilm` | Ollama | 384 |
 | `snowflake-arctic-embed` | Ollama | 1024 |
 
-For other models, set `embedding.dimensions` explicitly.
+Set `provider` to `"ollama"` (default) or `"openai"`. Any OpenAI-compatible endpoint also works via `baseUrl`. For unlisted models, set `embedding.dimensions` explicitly.
 
 
 ## AI Tools
@@ -172,7 +88,7 @@ The AI uses these tools autonomously:
 
 | Tool | Description |
 |------|-------------|
-| `memory_search` | Search across memories using vector + keyword + graph retrieval when embeddings are enabled, otherwise keyword + graph retrieval |
+| `memory_search` | Search across memories using vector + keyword + graph retrieval when embeddings are enabled, otherwise keyword + graph (or keyword-only if `graphWeight` is 0) |
 | `memory_store` | Save information with automatic entity extraction and relationship detection |
 | `memory_forget` | Delete memories by ID or search query |
 | `memory_profile` | View/rebuild the automatically maintained user profile |
@@ -190,7 +106,7 @@ openclaw supermemory wipe --confirm     # Delete all memories
 
 ## Vector Search
 
-The plugin always uses FTS5 keyword search plus graph traversal. When embeddings are enabled, it also uses `sqlite-vec` for vector similarity search and vector-based deduplication.
+The plugin always uses FTS5 keyword search. When `graphWeight > 0`, it also augments results with graph traversal. When embeddings are enabled, it additionally uses `sqlite-vec` for vector similarity search and vector-based deduplication.
 
 Because `sqlite-vec` is bundled with OpenClaw's built-in memory system, the plugin automatically detects and loads the extension from the host environment when embeddings are enabled. This means vector similarity search is usually available out-of-the-box without requiring any additional installation or configuration.
 
@@ -233,16 +149,24 @@ All settings are optional. The plugin now exposes only the operational knobs tha
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `maxRecallResults` | number | `10` | Default max results returned by memory search |
+| `maxRecallResults` | number | `10` | Max results returned by the `memory_search` tool. Auto-recall uses a separate cap. |
 | `vectorWeight` | number | `0.5` | Weight for vector similarity in hybrid search |
 | `textWeight` | number | `0.3` | Weight for BM25 keyword search |
 | `graphWeight` | number | `0.2` | Weight for graph-augmented retrieval |
+| `minScore` | number | `0.1` | Minimum combined score for a result to be returned |
+| `vectorMinScoreFactor` | number | `0.5` | Multiplied by `minScore` to set the vector search cut-off (effective floor: `minScore × vectorMinScoreFactor`) |
+| `graphSeedLimit` | number | `5` | Number of top-scored results used to seed the graph hop walk |
+| `graphHopDepth` | number | `2` | Depth of graph traversal per seed node |
+| `mmrLambda` | number | `0.7` | MMR trade-off between relevance (`1.0`) and diversity (`0.0`) in result re-ranking |
+| `autoRecallMaxMemories` | number | `5` | Hard cap on memories injected into the prompt during auto-recall (independent of `maxRecallResults`) |
+| `autoRecallMinScore` | number | `0.3` | Minimum score for a memory to be injected during auto-recall |
 
 ### Capture And Extraction
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `captureMaxChars` | number | `2000` | Max characters from the assembled conversation turn sent to auto-capture extraction |
+| `extractorMaxItems` | number | `10` | Max memories the LLM extractor may return per conversation turn |
 
 ### Relationships And Forgetting
 
@@ -250,6 +174,10 @@ All settings are optional. The plugin now exposes only the operational knobs tha
 |--------|------|---------|-------------|
 | `forgetExpiredIntervalMinutes` | number | `60` | Minutes between forgetting cleanup runs |
 | `temporalDecayDays` | number | `90` | Days before stale unpinned episodic memories decay |
+| `nearDuplicateThreshold` | number | `0.95` | Vector cosine similarity above which an incoming memory is treated as a near-duplicate and skipped |
+| `lexicalDuplicateThreshold` | number | `0.88` | Lexical overlap score above which an incoming memory is treated as a lexical duplicate and skipped |
+| `updateVectorMinScore` | number | `0.55` | Minimum vector similarity for a candidate memory to be considered for an `updates` relationship |
+| `maxRelatedEdges` | number | `5` | Maximum number of `related` graph edges written per memory on ingestion |
 
 ## Semantic Extraction
 
@@ -332,7 +260,7 @@ bun run test:integration:longmemeval --preset full
 bun run test:integration:longmemeval --run-official-eval --official-repo /tmp/LongMemEval
 ```
 
-The runner auto-loads repo-root `.env.local` and `.env` before reading env defaults. Start from [.env.sample](/Users/ivan/repos/supermemory-openclaw/.env.sample). The only supported runner env defaults are `LONGMEMEVAL_SOURCE_STATE_DIR` and `LONGMEMEVAL_OFFICIAL_REPO`.
+The runner auto-loads repo-root `.env.local` and `.env` before reading env defaults. Start from [.env.sample](.env.sample).
 
 What the runner does:
 

@@ -298,7 +298,6 @@ export class MemoryDB {
     try {
       this.db.exec(`INSERT INTO memories_fts(memories_fts) VALUES ('rebuild')`);
     } catch {
-      // best-effort rebuild only
     }
   }
 
@@ -1063,7 +1062,6 @@ export class MemoryDB {
     try {
       this.db.close();
     } catch {
-      // ignore
     }
   }
 

@@ -14,10 +14,6 @@ function hashText(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
-// ---------------------------------------------------------------------------
-// Ollama embedding provider (fully local)
-// ---------------------------------------------------------------------------
-
 class OllamaEmbeddingProvider implements EmbeddingProvider {
   readonly providerId = "ollama";
   readonly modelId: string;
@@ -73,10 +69,6 @@ class OllamaEmbeddingProvider implements EmbeddingProvider {
   }
 }
 
-// ---------------------------------------------------------------------------
-// OpenAI-compatible embedding provider
-// ---------------------------------------------------------------------------
-
 class OpenAICompatEmbeddingProvider implements EmbeddingProvider {
   readonly providerId: string;
   readonly modelId: string;
@@ -131,10 +123,6 @@ class OpenAICompatEmbeddingProvider implements EmbeddingProvider {
       .map((d) => new Float64Array(d.embedding));
   }
 }
-
-// ---------------------------------------------------------------------------
-// Cached embedding provider wrapper
-// ---------------------------------------------------------------------------
 
 class CachedEmbeddingProvider implements EmbeddingProvider {
   constructor(
@@ -193,10 +181,6 @@ class CachedEmbeddingProvider implements EmbeddingProvider {
     return `${this.inner.providerId}:${this.inner.modelId}:${hashText(text)}`;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Factory
-// ---------------------------------------------------------------------------
 
 export function createEmbeddingProvider(
   config: EmbeddingConfig,

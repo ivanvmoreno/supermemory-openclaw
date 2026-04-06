@@ -41,6 +41,7 @@ export async function runEntityMergeCycle(
 
   const entities = formatEntityMergeInputs(db, ENTITY_MERGE_ENTITY_LIMIT);
   if (entities.length < 2) return 0;
+  log.debug?.(`entity merge cycle start (${entities.length} entities)`);
 
   const vectors = cfg.embedding.enabled
     ? await embeddings.embedBatch(entities.map((entity) => entity.canonicalName))
@@ -54,7 +55,11 @@ export async function runEntityMergeCycle(
     0,
     ENTITY_MERGE_PAIR_LIMIT,
   );
-  if (candidatePairs.length === 0) return 0;
+  if (candidatePairs.length === 0) {
+    log.debug?.("entity merge cycle → no candidate pairs found");
+    return 0;
+  }
+  log.debug?.(`entity merge cycle → ${candidatePairs.length} candidate pairs, resolving…`);
 
   const decisions = await resolveEntityEquivalences(candidatePairs, semanticRuntime, log);
   let mergedCount = 0;
@@ -74,6 +79,9 @@ export async function runEntityMergeCycle(
     }
   }
 
+  if (mergedCount > 0) {
+    log.debug?.(`entity merge cycle → merged ${mergedCount} entity pairs`);
+  }
   return mergedCount;
 }
 
@@ -165,13 +173,13 @@ export class ForgettingService {
 
       if (reindexed > 0 || embedded > 0) {
         this.log.info(
-          "memory-supermemory: vector backfill progressed " +
+          "vector backfill progressed " +
             `(${reindexed} reindexed, ${embedded} embedded, ${stats.pendingBackfill} remaining)`,
         );
       }
     } catch (err) {
       shouldReschedule = true;
-      this.log.warn(`memory-supermemory: vector backfill failed: ${String(err)}`);
+      this.log.warn(`vector backfill failed: ${String(err)}`);
     } finally {
       this.backfillInFlight = false;
       if (shouldReschedule) {
@@ -184,6 +192,7 @@ export class ForgettingService {
     if (this.maintenanceInFlight) return;
 
     this.maintenanceInFlight = true;
+    this.log.debug?.("maintenance cycle start");
     try {
       const forgetting = runForgettingCycle(this.db, this.cfg);
       const mergedCount =
@@ -207,10 +216,10 @@ export class ForgettingService {
         if (mergedCount > 0) {
           parts.push(`${mergedCount} entity merges`);
         }
-        this.log.info(`memory-supermemory: maintenance cycle completed: ${parts.join(", ")}`);
+        this.log.info(`maintenance cycle completed: ${parts.join(", ")}`);
       }
     } catch (err) {
-      this.log.warn(`memory-supermemory: maintenance cycle failed: ${String(err)}`);
+      this.log.warn(`maintenance cycle failed: ${String(err)}`);
     } finally {
       this.maintenanceInFlight = false;
     }

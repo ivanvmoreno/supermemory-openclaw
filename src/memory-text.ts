@@ -1,3 +1,58 @@
+const LEADING_TIMESTAMP_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
+
+const INBOUND_META_SENTINELS = [
+  "Conversation info (untrusted metadata):",
+  "Sender (untrusted metadata):",
+  "Thread starter (untrusted, for context):",
+  "Replied message (untrusted, for context):",
+  "Forwarded message context (untrusted metadata):",
+  "Chat history since last reply (untrusted, for context):",
+];
+
+export function stripInboundMetadata(text: string): string {
+  if (!text) return text;
+  const withoutTimestamp = text.replace(LEADING_TIMESTAMP_RE, "");
+  const lines = withoutTimestamp.split("\n");
+  const result: string[] = [];
+  let inMetaBlock = false;
+  let inFencedJson = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    if (!inMetaBlock && INBOUND_META_SENTINELS.some((s) => s === line.trim())) {
+      const next = lines[i + 1];
+      if (next?.trim() !== "```json") {
+        result.push(line);
+        continue;
+      }
+      inMetaBlock = true;
+      inFencedJson = false;
+      continue;
+    }
+
+    if (inMetaBlock) {
+      if (!inFencedJson && line.trim() === "```json") {
+        inFencedJson = true;
+        continue;
+      }
+      if (inFencedJson) {
+        if (line.trim() === "```") {
+          inMetaBlock = false;
+          inFencedJson = false;
+        }
+        continue;
+      }
+      if (line.trim() === "") continue;
+      inMetaBlock = false;
+    }
+
+    result.push(line);
+  }
+
+  return result.join("\n").replace(/^\n+/, "").replace(/\n+$/, "");
+}
+
 const INJECTED_CONTEXT_BLOCKS = [
   /<supermemory-context>[\s\S]*?<\/supermemory-context>\s*/gi,
   /<supermemory-profile>[\s\S]*?<\/supermemory-profile>\s*/gi,

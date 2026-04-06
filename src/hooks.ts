@@ -3,28 +3,19 @@ import type { MemoryDB } from "./db.ts";
 import type { EmbeddingProvider } from "./embeddings.ts";
 import { extractMemoryCandidates } from "./fact-extractor.ts";
 import { processNewMemory } from "./graph-engine.ts";
+import type { PluginLogger } from "./logger.ts";
 import { formatProfileForPrompt, getOrBuildProfile } from "./profile-builder.ts";
 import {
   isSyntheticMemoryText,
   normalizeMemoryText,
   sanitizeMemoryTextForPrompt,
   stripInjectedMemoryContext,
+  stripInboundMetadata,
 } from "./memory-text.ts";
 import type { SemanticSubagentRuntime } from "./semantic-runtime.ts";
 import { hybridSearch } from "./search.ts";
 
-// ---------------------------------------------------------------------------
-// Types (matching OpenClaw lifecycle event shapes)
-// ---------------------------------------------------------------------------
-
-type Logger = {
-  info: (msg: string) => void;
-  warn: (msg: string) => void;
-};
-
 const SKIPPED_PROVIDERS = new Set(["exec-event", "cron-event", "heartbeat"]);
-const AUTO_RECALL_MAX_MEMORIES = 5;
-const AUTO_RECALL_MIN_SCORE = 0.3;
 const AUTO_CAPTURE_MIN_TEXT_BLOCK_CHARS = 10;
 
 function getLastTurn(messages: unknown[]): unknown[] {
@@ -69,37 +60,49 @@ function extractTextBlocks(content: unknown): string[] {
   return texts;
 }
 
-// ---------------------------------------------------------------------------
-// Auto-recall hook (before_prompt_build — current API)
-// ---------------------------------------------------------------------------
-
 export function createAutoRecallHook(
   db: MemoryDB,
   embeddings: EmbeddingProvider,
   cfg: SupermemoryConfig,
   state: { interactionCount: number },
-  log: Logger,
+  log: PluginLogger,
 ) {
-  return async (event: { prompt: string; messages: unknown[] }) => {
-    if (!cfg.autoRecall) return;
-    if (!event.prompt || event.prompt.length < 5) return;
+  return async (event: { prompt: string; messages: unknown[] }, ctx?: { messageProvider?: unknown }) => {
+    if (!cfg.autoRecall) {
+      log.debug("auto-recall skipped (disabled)");
+      return;
+    }
+    const provider = typeof ctx?.messageProvider === "string" ? ctx.messageProvider : undefined;
+    if (provider && SKIPPED_PROVIDERS.has(provider)) {
+      log.debug(`auto-recall skipped (provider=${provider})`);
+      return;
+    }
+    if (!event.prompt || event.prompt.length < 5) {
+      log.debug("auto-recall skipped (prompt too short)");
+      return;
+    }
 
     try {
       state.interactionCount++;
 
-      // Build/refresh profile
-      const profile = getOrBuildProfile(db, cfg, state.interactionCount);
+      const profile = getOrBuildProfile(db, cfg, state.interactionCount, log);
       const profileSection = formatProfileForPrompt(profile, cfg);
+      log.debug(
+        `auto-recall profile (lt=${profile.longTerm.length}, recent=${profile.recent.length}), searching memories…`,
+      );
 
-      // Search for relevant memories
-      const results = await hybridSearch(event.prompt, db, embeddings, cfg, {
-        maxResults: Math.min(cfg.maxRecallResults, AUTO_RECALL_MAX_MEMORIES),
-        minScore: AUTO_RECALL_MIN_SCORE,
-      });
+      const query = stripInboundMetadata(event.prompt);
+      const results = await hybridSearch(query, db, embeddings, cfg, {
+        maxResults: Math.min(cfg.maxRecallResults, cfg.autoRecallMaxMemories),
+        minScore: cfg.autoRecallMinScore,
+      }, log);
 
       const dedupedResults = dedupeSearchResults(results);
 
-      if (dedupedResults.length === 0 && profileSection.length === 0) return;
+      if (dedupedResults.length === 0 && profileSection.length === 0) {
+        log.debug("auto-recall → no results and no profile, skipping injection");
+        return;
+      }
 
       const sections: string[] = [];
 
@@ -121,8 +124,15 @@ export function createAutoRecallHook(
       }
 
       log.info(
-        `memory-supermemory: injecting profile (${profile.longTerm.length}lt/${profile.recent.length}r) + ${dedupedResults.length} memories into context`,
+        `injecting profile (${profile.longTerm.length}lt/${profile.recent.length}r) + ${dedupedResults.length} memories into context`,
       );
+      if (dedupedResults.length > 0) {
+        log.debug(
+          `recalled memories: ${dedupedResults
+            .map((r) => `[${r.memory.memory_type}] ${(r.score * 100).toFixed(0)}% via ${r.source}`)
+            .join(" | ")}`,
+        );
+      }
 
       return {
         prependContext:
@@ -133,20 +143,16 @@ export function createAutoRecallHook(
           "</supermemory-context>",
       };
     } catch (err) {
-      log.warn(`memory-supermemory: auto-recall failed: ${String(err)}`);
+      log.error("auto-recall failed", err);
     }
   };
 }
-
-// ---------------------------------------------------------------------------
-// Auto-capture hook
-// ---------------------------------------------------------------------------
 
 export function createAutoCaptureHook(
   db: MemoryDB,
   embeddings: EmbeddingProvider,
   cfg: SupermemoryConfig,
-  log: Logger,
+  log: PluginLogger,
   subagent?: SemanticSubagentRuntime | null,
 ) {
   return async (
@@ -159,7 +165,10 @@ export function createAutoCaptureHook(
 
     const provider =
       typeof ctx?.messageProvider === "string" ? ctx.messageProvider : undefined;
-    if (provider && SKIPPED_PROVIDERS.has(provider)) return;
+    if (provider && SKIPPED_PROVIDERS.has(provider)) {
+      log.debug(`auto-capture skipped (provider=${provider})`);
+      return;
+    }
 
     try {
       const lastTurn = getLastTurn(event.messages);
@@ -180,12 +189,21 @@ export function createAutoCaptureHook(
         }
       }
 
-      if (turnParts.length === 0) return;
+      if (turnParts.length === 0) {
+        log.debug("auto-capture skipped (empty turn)");
+        return;
+      }
 
       const turnText = turnParts.join("\n\n").slice(0, cfg.captureMaxChars);
+      log.debug(`auto-capture extracting from turn (${turnText.length} chars)…`);
       const candidates = await extractMemoryCandidates(turnText, subagent, log, {
         referenceTimeMs: Date.now(),
+        maxItems: cfg.extractorMaxItems,
       });
+
+      if (candidates.length === 0) {
+        log.debug("auto-capture → LLM extraction returned no candidates for this turn");
+      }
 
       let stored = 0;
       for (const candidate of candidates) {
@@ -195,29 +213,27 @@ export function createAutoCaptureHook(
             semanticMemory: candidate,
             semanticRuntime: subagent,
             log,
+            cfg,
           });
           if (memory) {
             stored++;
+            log.debug(
+              `captured [${candidate.memoryType}] "${candidate.text.slice(0, 60)}" (${candidate.entities.length} entities)`,
+            );
           }
         } catch (err) {
-          log.warn(`memory-supermemory: failed to store extracted memory: ${String(err)}`);
+          log.error("failed to store extracted memory", err);
         }
       }
 
       if (stored > 0) {
-        log.info(`memory-supermemory: auto-captured ${stored} memories`);
-      } else if (cfg.debug && candidates.length === 0) {
-        log.info("memory-supermemory: LLM extraction returned no semantic memories for this turn");
+        log.info(`auto-captured ${stored} memories`);
       }
     } catch (err) {
-      log.warn(`memory-supermemory: auto-capture failed: ${String(err)}`);
+      log.error("auto-capture failed", err);
     }
   };
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function escapeForContext(text: string, maxChars: number): string {
   return sanitizeMemoryTextForPrompt(text, maxChars);

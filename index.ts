@@ -1,10 +1,11 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk"
-import { registerSupermemoryCli } from "./src/cli.ts"
-import { parseSupermemoryConfig, vectorDimsForModel } from "./src/config.ts"
+import { registerSlashCommands, registerSupermemoryCli } from "./src/cli.ts"
+import { parseSupermemoryConfig, supermemoryConfigSchema, vectorDimsForModel } from "./src/config.ts"
 import { MemoryDB } from "./src/db.ts"
 import { createEmbeddingProvider } from "./src/embeddings.ts"
 import { ForgettingService } from "./src/forgetting.ts"
 import { createAutoCaptureHook, createAutoRecallHook } from "./src/hooks.ts"
+import { createPluginLogger } from "./src/logger.ts"
 import { resolveSearchMode } from "./src/search.ts"
 import {
   createMemoryForgetTool,
@@ -20,6 +21,7 @@ export default {
   description:
     "Local graph-based memory with entity extraction, user profiles, and automatic forgetting — inspired by Supermemory",
   kind: "memory" as const,
+  configSchema: supermemoryConfigSchema,
 
   register(api: OpenClawPluginApi) {
     const cfg = parseSupermemoryConfig(api.pluginConfig)
@@ -34,18 +36,15 @@ export default {
     const subagent = (api as unknown as { runtime?: { subagent?: unknown } }).runtime?.subagent ?? null
 
     const state = { interactionCount: 0 }
+    const log = createPluginLogger(api.logger, "memory-supermemory", cfg.debug)
 
-    api.logger.info(
-      `memory-supermemory: initialized (db: ${resolvedDbPath}, ` +
+    log.info(
+      `initialized (db: ${resolvedDbPath}, ` +
         (cfg.embedding.enabled
           ? `embedding: ${cfg.embedding.provider}/${cfg.embedding.model}, `
           : "embedding: disabled, ") +
-        `search: ${resolveSearchMode(cfg, db)})`,
+        `search: ${resolveSearchMode(cfg, db)}, debug: ${cfg.debug})`,
     )
-
-    // ====================================================================
-    // Memory prompt section — tool usage guidance
-    // ====================================================================
 
     api.registerMemoryPromptSection(({ availableTools }) => {
       const hasSearch = availableTools.has("memory_search")
@@ -81,10 +80,6 @@ export default {
       return lines
     })
 
-    // ====================================================================
-    // Memory flush plan — capture durable memories before compaction
-    // ====================================================================
-
     if (typeof api.registerMemoryFlushPlan === "function") api.registerMemoryFlushPlan((params) => {
       const flushCfg = (params.cfg as Record<string, any>)?.agents?.defaults?.compaction?.memoryFlush
       if (flushCfg?.enabled === false) return null
@@ -112,10 +107,6 @@ export default {
         relativePath: "memory/supermemory-flush.md",
       }
     })
-
-    // ====================================================================
-    // Memory runtime — MemoryPluginRuntime for core integration
-    // ====================================================================
 
     if (typeof api.registerMemoryRuntime === "function") api.registerMemoryRuntime({
       async getMemorySearchManager() {
@@ -221,16 +212,12 @@ export default {
       },
     })
 
-    // ====================================================================
-    // Tools
-    // ====================================================================
-
     const toolCtx: ToolContext = {
       db,
       embeddings,
       cfg,
       semanticRuntime: subagent as any,
-      log: api.logger,
+      log,
       get interactionCount() {
         return state.interactionCount
       },
@@ -244,55 +231,56 @@ export default {
     api.registerTool(createMemoryForgetTool(toolCtx), { name: "memory_forget" })
     api.registerTool(createMemoryProfileTool(toolCtx), { name: "memory_profile" })
 
-    // ====================================================================
-    // Lifecycle hooks
-    // ====================================================================
+    registerSlashCommands(api, db, embeddings, cfg, log)
+
+    if (cfg.embedding.enabled && typeof api.registerMemoryEmbeddingProvider === "function") {
+      api.registerMemoryEmbeddingProvider({
+        embed: (text: string) => embeddings.embed(text),
+        embedBatch: (texts: string[]) => embeddings.embedBatch(texts),
+        get dimensions() { return embeddings.dimensions },
+      })
+    }
 
     if (cfg.autoRecall) {
       api.on(
         "before_prompt_build",
-        createAutoRecallHook(db, embeddings, cfg, state, api.logger),
+        createAutoRecallHook(db, embeddings, cfg, state, log),
       )
     }
 
     if (cfg.autoCapture && cfg.captureMode !== "off") {
       if (!subagent) {
-        api.logger.warn(
-          "memory-supermemory: subagent runtime not available — auto-capture (LLM semantic extraction) is disabled. " +
+        log.warn(
+          "subagent runtime not available — auto-capture (LLM semantic extraction) is disabled. " +
           "The memory_store tool will fall back to direct storage when semantic extraction is unavailable.",
         )
       }
       api.on(
         "agent_end",
-        createAutoCaptureHook(db, embeddings, cfg, api.logger, subagent as any),
+        createAutoCaptureHook(db, embeddings, cfg, log, subagent as any),
       )
     }
 
-    // ====================================================================
-    // CLI
-    // ====================================================================
-
     api.registerCli(
       ({ program }: { program: unknown }) => {
-        registerSupermemoryCli(program, db, embeddings, cfg)
+        registerSupermemoryCli(program, db, embeddings, cfg, {
+          loadConfig: api.runtime.config.loadConfig,
+          writeConfigFile: api.runtime.config.writeConfigFile,
+        })
       },
       {
         commands: ["supermemory"],
         descriptors: [
           {
             name: "supermemory",
-            description: "Graph memory: search, profile, stats, wipe",
+            description: "Graph memory: search, profile, stats, wipe, configure",
             hasSubcommands: true,
           },
         ],
       },
     )
 
-    // ====================================================================
-    // Background service — forgetting + profile rebuild
-    // ====================================================================
-
-    const forgettingService = new ForgettingService(db, cfg, api.logger, {
+    const forgettingService = new ForgettingService(db, cfg, log, {
       embeddings,
       semanticRuntime: subagent as any,
     })
@@ -301,8 +289,8 @@ export default {
       id: "openclaw-memory-supermemory",
       start: () => {
         forgettingService.start()
-        api.logger.info(
-          "memory-supermemory: service started " +
+        log.info(
+          "service started " +
             `(autoRecall: ${cfg.autoRecall}, autoCapture: ${cfg.autoCapture}, ` +
             `forgetting: every ${cfg.forgetExpiredIntervalMinutes}min)`,
         )
@@ -310,7 +298,7 @@ export default {
       stop: () => {
         forgettingService.stop()
         db.close()
-        api.logger.info("memory-supermemory: service stopped")
+        log.info("service stopped")
       },
     })
   },

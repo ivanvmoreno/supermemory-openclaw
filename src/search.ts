@@ -1,10 +1,7 @@
 import type { SupermemoryConfig } from "./config.ts";
 import type { MemoryDB, MemoryRow } from "./db.ts";
 import type { EmbeddingProvider } from "./embeddings.ts";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+import type { SemanticLogger } from "./semantic-runtime.ts";
 
 export type SearchResult = {
   memory: MemoryRow;
@@ -21,13 +18,8 @@ export type SearchOptions = {
   includeSuperseded?: boolean;
 };
 
-const DEFAULT_MIN_SCORE = 0.1;
-const VECTOR_MIN_SCORE_FACTOR = 0.5;
-const GRAPH_SEED_LIMIT = 5;
-const GRAPH_HOP_DEPTH = 2;
 const GRAPH_NEW_MEMORY_SCORE = 0.5;
 const GRAPH_EXISTING_MEMORY_SCORE = 0.3;
-const MMR_LAMBDA = 0.7;
 const MMR_SAME_SOURCE_PENALTY = 0.8;
 
 export function isVectorSearchActive(
@@ -47,20 +39,20 @@ export function resolveSearchMode(
   return cfg.graphWeight > 0 ? "fts+graph" : "fts-only";
 }
 
-// ---------------------------------------------------------------------------
-// Hybrid search
-// ---------------------------------------------------------------------------
-
 export async function hybridSearch(
   query: string,
   db: MemoryDB,
   embeddings: EmbeddingProvider,
   cfg: SupermemoryConfig,
   options?: SearchOptions,
+  log?: SemanticLogger,
 ): Promise<SearchResult[]> {
   const maxResults = options?.maxResults ?? cfg.maxRecallResults;
-  const minScore = options?.minScore ?? DEFAULT_MIN_SCORE;
+  const minScore = options?.minScore ?? cfg.minScore;
   const fetchLimit = maxResults * 3;
+
+  const searchMode = resolveSearchMode(cfg, db);
+  log?.debug?.(`hybridSearch start (mode=${searchMode}, maxResults=${maxResults}, minScore=${minScore}, query="${query.slice(0, 80)}")`);
 
   const scoreMap = new Map<string, { vectorScore: number; ftsScore: number; graphScore: number }>();
 
@@ -73,30 +65,34 @@ export async function hybridSearch(
     return entry;
   }
 
-  // 1. Vector search
+  let vectorHits = 0;
   if (isVectorSearchActive(cfg, db)) {
     try {
       const queryVector = await embeddings.embed(query);
       const vectorResults = db.vectorSearch(
         queryVector,
         fetchLimit,
-        minScore * VECTOR_MIN_SCORE_FACTOR,
+        minScore * cfg.vectorMinScoreFactor,
       );
       for (const vr of vectorResults) {
         getEntry(vr.id).vectorScore = vr.score;
       }
-    } catch {
-      // Vector search failed — continue with FTS only
+      vectorHits = vectorResults.length;
+      log?.debug?.(`vector search → ${vectorHits} hits`);
+    } catch (err) {
+      log?.debug?.(`vector search unavailable (${String(err).slice(0, 80)}), falling back to FTS`);
     }
+  } else {
+    log?.debug?.("vector search skipped (disabled or unavailable)");
   }
 
-  // 2. FTS search
   const ftsResults = db.ftsSearch(query, fetchLimit);
   for (const fr of ftsResults) {
     getEntry(fr.id).ftsScore = fr.score;
   }
+  log?.debug?.(`FTS search → ${ftsResults.length} hits`);
 
-  // 3. Graph augmentation — for top vector+fts results, pull related memories
+  let graphNew = 0;
   if (cfg.graphWeight > 0) {
     const topIds = [...scoreMap.entries()]
       .sort((a, b) => {
@@ -104,14 +100,15 @@ export async function hybridSearch(
         const bScore = b[1].vectorScore * cfg.vectorWeight + b[1].ftsScore * cfg.textWeight;
         return bScore - aScore;
       })
-      .slice(0, GRAPH_SEED_LIMIT)
+      .slice(0, cfg.graphSeedLimit)
       .map(([id]) => id);
 
     for (const seedId of topIds) {
-      const related = db.getRelatedMemoryIds(seedId, GRAPH_HOP_DEPTH);
+      const related = db.getRelatedMemoryIds(seedId, cfg.graphHopDepth);
       for (const relatedId of related) {
         if (!scoreMap.has(relatedId)) {
           getEntry(relatedId).graphScore = GRAPH_NEW_MEMORY_SCORE;
+          graphNew++;
         } else {
           getEntry(relatedId).graphScore = Math.max(
             getEntry(relatedId).graphScore,
@@ -120,9 +117,9 @@ export async function hybridSearch(
         }
       }
     }
+    log?.debug?.(`graph augmentation → ${graphNew} new candidates added (seeds=${topIds.length}, depth=${cfg.graphHopDepth})`);
   }
 
-  // 4. Merge scores
   const { vectorWeight, textWeight, graphWeight } = cfg;
   const totalWeight = vectorWeight + textWeight + graphWeight;
 
@@ -149,18 +146,17 @@ export async function hybridSearch(
     merged.push({ id, score: combined, primarySource });
   }
 
-  // 5. Sort by score descending
   merged.sort((a, b) => b.score - a.score);
+  log?.debug?.(`merged score map → ${merged.length} candidates above minScore=${minScore}`);
 
-  // 6. MMR diversity re-ranking (simple — skip very similar consecutive results)
   const diversified = mmrRerank(
     merged,
     maxResults,
-    MMR_LAMBDA,
+    cfg.mmrLambda,
     MMR_SAME_SOURCE_PENALTY,
   );
+  log?.debug?.(`after MMR → ${diversified.length} results (λ=${cfg.mmrLambda})`);
 
-  // 7. Hydrate results
   const results: SearchResult[] = [];
   for (const item of diversified) {
     const memory = db.getMemory(item.id);
@@ -178,10 +174,6 @@ export async function hybridSearch(
   return results.slice(0, maxResults);
 }
 
-// ---------------------------------------------------------------------------
-// MMR diversity re-ranking (simplified)
-// ---------------------------------------------------------------------------
-
 function mmrRerank(
   items: Array<{ id: string; score: number; primarySource: "vector" | "fts" | "graph" }>,
   limit: number,
@@ -193,7 +185,6 @@ function mmrRerank(
   const selected: typeof items = [];
   const remaining = [...items];
 
-  // Always include the top result
   if (remaining.length > 0) {
     selected.push(remaining.shift()!);
   }
@@ -204,7 +195,6 @@ function mmrRerank(
 
     for (let i = 0; i < remaining.length; i++) {
       const relevance = remaining[i].score;
-      // Penalize items from the same source as recently selected
       const lastSelected = selected[selected.length - 1];
       const diversity =
         lastSelected?.primarySource === remaining[i].primarySource ? sameSourcePenalty : 1.0;

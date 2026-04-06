@@ -4,13 +4,10 @@ import type { MemoryDB } from "./db.ts";
 import type { EmbeddingProvider } from "./embeddings.ts";
 import { extractMemoryCandidates } from "./fact-extractor.ts";
 import { processNewMemory } from "./graph-engine.ts";
+import type { PluginLogger } from "./logger.ts";
 import { getOrBuildProfile, type UserProfile } from "./profile-builder.ts";
-import type { SemanticLogger, SemanticSubagentRuntime } from "./semantic-runtime.ts";
+import type { SemanticSubagentRuntime } from "./semantic-runtime.ts";
 import { hybridSearch, resolveSearchMode } from "./search.ts";
-
-// ---------------------------------------------------------------------------
-// Types matching OpenClaw tool shape
-// ---------------------------------------------------------------------------
 
 type ToolResult = {
   content: Array<{ type: string; text: string }>;
@@ -27,26 +24,18 @@ export type ToolDefinition = {
   execute: ToolExecuteFn;
 };
 
-// ---------------------------------------------------------------------------
-// Shared state holder
-// ---------------------------------------------------------------------------
-
 export type ToolContext = {
   db: MemoryDB;
   embeddings: EmbeddingProvider;
   cfg: SupermemoryConfig;
   interactionCount: number;
   semanticRuntime?: SemanticSubagentRuntime | null;
-  log: SemanticLogger;
+  log: PluginLogger;
 };
 
 const FORGET_SEARCH_CANDIDATE_LIMIT = 5;
 const FORGET_SEARCH_MIN_SCORE = 0.5;
 const FORGET_AUTO_DELETE_MIN_SCORE = 0.8;
-
-// ---------------------------------------------------------------------------
-// memory_search
-// ---------------------------------------------------------------------------
 
 export function createMemorySearchTool(ctx: ToolContext): ToolDefinition {
   const searchMode = resolveSearchMode(ctx.cfg, ctx.db);
@@ -73,7 +62,7 @@ export function createMemorySearchTool(ctx: ToolContext): ToolDefinition {
 
       const results = await hybridSearch(query, ctx.db, ctx.embeddings, ctx.cfg, {
         maxResults: limit,
-      });
+      }, ctx.log);
 
       if (results.length === 0) {
         return {
@@ -108,10 +97,6 @@ export function createMemorySearchTool(ctx: ToolContext): ToolDefinition {
   };
 }
 
-// ---------------------------------------------------------------------------
-// memory_store
-// ---------------------------------------------------------------------------
-
 export function createMemoryStoreTool(ctx: ToolContext): ToolDefinition {
   return {
     name: "memory_store",
@@ -141,6 +126,7 @@ export function createMemoryStoreTool(ctx: ToolContext): ToolDefinition {
       if (ctx.semanticRuntime) {
         const extracted = await extractMemoryCandidates(text, ctx.semanticRuntime, ctx.log, {
           referenceTimeMs: Date.now(),
+          maxItems: ctx.cfg.extractorMaxItems,
         });
 
         for (const candidate of extracted) {
@@ -151,6 +137,7 @@ export function createMemoryStoreTool(ctx: ToolContext): ToolDefinition {
             semanticMemory: candidate,
             semanticRuntime: ctx.semanticRuntime,
             log: ctx.log,
+            cfg: ctx.cfg,
           });
           if (memory) {
             storedMemories.push(memory);
@@ -170,6 +157,7 @@ export function createMemoryStoreTool(ctx: ToolContext): ToolDefinition {
           pinnedOverride: pinned,
           semanticRuntime: ctx.semanticRuntime ?? null,
           log: ctx.log,
+          cfg: ctx.cfg,
         });
         if (fallback) {
           storedMemories = [fallback];
@@ -256,10 +244,6 @@ function formatEntityMentionForDisplay(entity: {
   return entity.kind ? `${base} (${entity.kind})` : base;
 }
 
-// ---------------------------------------------------------------------------
-// memory_forget
-// ---------------------------------------------------------------------------
-
 export function createMemoryForgetTool(ctx: ToolContext): ToolDefinition {
   return {
     name: "memory_forget",
@@ -290,7 +274,7 @@ export function createMemoryForgetTool(ctx: ToolContext): ToolDefinition {
         const results = await hybridSearch(query, ctx.db, ctx.embeddings, ctx.cfg, {
           maxResults: FORGET_SEARCH_CANDIDATE_LIMIT,
           minScore: FORGET_SEARCH_MIN_SCORE,
-        });
+        }, ctx.log);
 
         if (results.length === 0) {
           return {
@@ -342,10 +326,6 @@ export function createMemoryForgetTool(ctx: ToolContext): ToolDefinition {
   };
 }
 
-// ---------------------------------------------------------------------------
-// memory_profile
-// ---------------------------------------------------------------------------
-
 export function createMemoryProfileTool(ctx: ToolContext): ToolDefinition {
   return {
     name: "memory_profile",
@@ -365,7 +345,7 @@ export function createMemoryProfileTool(ctx: ToolContext): ToolDefinition {
         const { buildUserProfile } = await import("./profile-builder.ts");
         profile = buildUserProfile(ctx.db, ctx.cfg);
       } else {
-        profile = getOrBuildProfile(ctx.db, ctx.cfg, ctx.interactionCount);
+        profile = getOrBuildProfile(ctx.db, ctx.cfg, ctx.interactionCount, ctx.log);
       }
 
       const stats = ctx.db.stats();

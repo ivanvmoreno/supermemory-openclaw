@@ -1,10 +1,23 @@
 {
 	"$schema": "https://biomejs.dev/schemas/2.4.10/schema.json",
 	"formatter": {
-		"enabled": false
+		"enabled": true,
+		"indentStyle": "tab"
+	},
+	"javascript": {
+		"formatter": {
+			"quoteStyle": "double",
+			"semicolons": "asNeeded"
+		}
 	},
 	"assist": {
-		"enabled": false
+		"enabled": true,
+		"actions": {
+			"source": {
+				"organizeImports": "on",
+				"useSortedKeys": "off"
+			}
+		}
 	},
 	"linter": {
 		"enabled": true,

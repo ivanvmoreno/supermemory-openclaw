@@ -60,11 +60,12 @@ export async function extractMemoryCandidates(
   turnText: string,
   subagent: SemanticSubagentRuntime,
   log: SemanticLogger,
-  options?: { referenceTimeMs?: number },
+  options?: { referenceTimeMs?: number; maxItems?: number },
 ): Promise<ExtractedMemoryCandidate[]> {
   if (!turnText || turnText.trim().length < EXTRACTOR_TURN_MIN_CHARS) return [];
 
   const referenceTimeIso = new Date(options?.referenceTimeMs ?? Date.now()).toISOString();
+  const maxItems = options?.maxItems ?? EXTRACTOR_MAX_ITEMS;
   const systemPrompt = `You are a multilingual memory extraction engine. Read the input and return a JSON array only.
 
 Each array item must have exactly these keys:
@@ -85,7 +86,7 @@ Rules:
 - Resolve relative time expressions against this reference timestamp: ${referenceTimeIso}
 - "expiresAtIso" must be a valid ISO-8601 timestamp or null.
 - Skip greetings, filler, pure questions, code, stack traces, and generic assistant advice.
-- Maximum 10 items.
+- Maximum ${maxItems} items.
 - If nothing is worth storing, return [].
 
 Return only valid JSON. No markdown, no prose, no comments.`;
@@ -99,19 +100,24 @@ Return only valid JSON. No markdown, no prose, no comments.`;
     });
 
     if (!raw?.trim()) return [];
-    const parsed = parseExtractionJson(raw);
+    const parsed = parseExtractionJson(raw, maxItems);
     if (!parsed) {
-      log.warn("memory-supermemory: extractor returned malformed JSON; skipping turn");
+      log.warn("extractor returned malformed JSON; skipping turn");
       return [];
     }
 
     if (parsed.length > 0) {
-      log.info(`memory-supermemory: extracted ${parsed.length} semantic memories from text`);
+      log.info(`extracted ${parsed.length} semantic memories from text`);
+      log.debug?.(
+        `extraction items: ${parsed
+          .map((c) => `[${c.memoryType}] "${c.text.slice(0, 60)}" (${c.entities.length} entities)`)
+          .join(" | ")}`,
+      );
     }
 
     return parsed;
   } catch (err) {
-    log.warn(`memory-supermemory: extraction error: ${String(err)}`);
+    log.warn(`extraction error: ${String(err)}`);
     return [];
   }
 }
@@ -166,7 +172,7 @@ Rules:
     if (!raw?.trim()) return [];
     const parsed = parseRelationshipJson(raw);
     if (!parsed) {
-      log.warn("memory-supermemory: relationship resolver returned malformed JSON");
+      log.warn("relationship resolver returned malformed JSON");
       return [];
     }
 
@@ -180,9 +186,18 @@ Rules:
       }
       filtered.push(decision);
     }
+
+    if (filtered.length > 0) {
+      const updates = filtered.filter((d) => d.relationType === "updates").length;
+      const related = filtered.filter((d) => d.relationType === "related").length;
+      log.debug?.(
+        `relationship resolver: updates=${updates}, related=${related}, none=${filtered.filter((d) => d.relationType === "none").length}`,
+      );
+    }
+
     return filtered;
   } catch (err) {
-    log.warn(`memory-supermemory: relationship resolver error: ${String(err)}`);
+    log.warn(`relationship resolver error: ${String(err)}`);
     return [];
   }
 }
@@ -220,7 +235,7 @@ Rules:
     if (!raw?.trim()) return [];
     const parsed = parseEntityMergeJson(raw);
     if (!parsed) {
-      log.warn("memory-supermemory: entity merge resolver returned malformed JSON");
+      log.warn("entity merge resolver returned malformed JSON");
       return [];
     }
 
@@ -232,12 +247,12 @@ Rules:
       ),
     );
   } catch (err) {
-    log.warn(`memory-supermemory: entity merge resolver error: ${String(err)}`);
+    log.warn(`entity merge resolver error: ${String(err)}`);
     return [];
   }
 }
 
-function parseExtractionJson(raw: string): ExtractedMemoryCandidate[] | null {
+function parseExtractionJson(raw: string, maxItems?: number): ExtractedMemoryCandidate[] | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw.trim());
@@ -247,8 +262,9 @@ function parseExtractionJson(raw: string): ExtractedMemoryCandidate[] | null {
 
   if (!Array.isArray(parsed)) return null;
 
+  const limit = maxItems ?? EXTRACTOR_MAX_ITEMS;
   const results: ExtractedMemoryCandidate[] = [];
-  for (const item of parsed.slice(0, EXTRACTOR_MAX_ITEMS)) {
+  for (const item of parsed.slice(0, limit)) {
     const candidate = coerceMemoryCandidate(item);
     if (candidate) {
       results.push(candidate);

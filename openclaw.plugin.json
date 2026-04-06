@@ -34,7 +34,19 @@
       "graphWeight": { "type": "number", "minimum": 0, "maximum": 1 },
       "dbPath": { "type": "string" },
       "captureMaxChars": { "type": "number", "minimum": 100, "maximum": 10000 },
-      "debug": { "type": "boolean" }
+      "debug": { "type": "boolean" },
+      "minScore": { "type": "number", "minimum": 0, "maximum": 1 },
+      "vectorMinScoreFactor": { "type": "number", "minimum": 0, "maximum": 1 },
+      "graphSeedLimit": { "type": "number", "minimum": 1, "maximum": 50 },
+      "graphHopDepth": { "type": "number", "minimum": 1, "maximum": 5 },
+      "mmrLambda": { "type": "number", "minimum": 0, "maximum": 1 },
+      "autoRecallMaxMemories": { "type": "number", "minimum": 1, "maximum": 50 },
+      "autoRecallMinScore": { "type": "number", "minimum": 0, "maximum": 1 },
+      "nearDuplicateThreshold": { "type": "number", "minimum": 0, "maximum": 1 },
+      "lexicalDuplicateThreshold": { "type": "number", "minimum": 0, "maximum": 1 },
+      "updateVectorMinScore": { "type": "number", "minimum": 0, "maximum": 1 },
+      "maxRelatedEdges": { "type": "number", "minimum": 0, "maximum": 20 },
+      "extractorMaxItems": { "type": "number", "minimum": 1, "maximum": 50 }
     }
   },
   "uiHints": {
@@ -154,6 +166,66 @@
     "debug": {
       "label": "Debug Logging",
       "help": "Enable extra memory-plugin logging",
+      "advanced": true
+    },
+    "minScore": {
+      "label": "Min Score",
+      "help": "Minimum combined score for a result to be returned (0–1)",
+      "advanced": true
+    },
+    "vectorMinScoreFactor": {
+      "label": "Vector Min Score Factor",
+      "help": "Vector score floor as a fraction of minScore (0–1)",
+      "advanced": true
+    },
+    "graphSeedLimit": {
+      "label": "Graph Seed Limit",
+      "help": "Max top results used as seeds for graph hop expansion",
+      "advanced": true
+    },
+    "graphHopDepth": {
+      "label": "Graph Hop Depth",
+      "help": "Number of relationship hops followed during graph expansion (1–5)",
+      "advanced": true
+    },
+    "mmrLambda": {
+      "label": "MMR Lambda",
+      "help": "Maximal Marginal Relevance diversity weight (0 = pure diversity, 1 = pure relevance)",
+      "advanced": true
+    },
+    "autoRecallMaxMemories": {
+      "label": "Auto-Recall Max Memories",
+      "help": "Cap on how many memories are injected per auto-recall turn",
+      "advanced": true
+    },
+    "autoRecallMinScore": {
+      "label": "Auto-Recall Min Score",
+      "help": "Minimum score for a memory to be injected by auto-recall (0–1)",
+      "advanced": true
+    },
+    "nearDuplicateThreshold": {
+      "label": "Near-Duplicate Threshold",
+      "help": "Vector cosine similarity above which two memories are considered near-duplicates (0–1)",
+      "advanced": true
+    },
+    "lexicalDuplicateThreshold": {
+      "label": "Lexical Duplicate Threshold",
+      "help": "Normalized edit-distance similarity above which two memories are considered lexical duplicates (0–1)",
+      "advanced": true
+    },
+    "updateVectorMinScore": {
+      "label": "Update Vector Min Score",
+      "help": "Vector similarity threshold that triggers an update relationship instead of a new memory (0–1)",
+      "advanced": true
+    },
+    "maxRelatedEdges": {
+      "label": "Max Related Edges",
+      "help": "Maximum number of 'related' graph edges stored per memory (0–20)",
+      "advanced": true
+    },
+    "extractorMaxItems": {
+      "label": "Extractor Max Items",
+      "help": "Maximum memory candidates returned per LLM extraction pass (1–50)",
       "advanced": true
     }
   }
