@@ -378,7 +378,7 @@ export class MemoryDB {
       this.db.exec(`
         CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(
           id TEXT PRIMARY KEY,
-          vector float[${this.vectorDims}]
+          vector float[${this.vectorDims}] distance_metric=cosine
         );
       `);
       this.vecAvailable = true;
@@ -680,7 +680,7 @@ export class MemoryDB {
       .filter((row) => !supersededIds.has(row.id))
       .map((row) => ({
         id: row.id,
-        score: 1 / (1 + row.distance),
+        score: 1 - row.distance,
       }))
       .filter((row) => row.score >= minScore);
   }

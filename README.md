@@ -3,76 +3,44 @@
 Local graph-based memory plugin for [OpenClaw](https://github.com/nichochar/openclaw) — inspired by [Supermemory](https://supermemory.ai). Runs entirely on your machine with no cloud dependencies.
 
 > **Disclaimer:** This is an independent project. It is not affiliated with, endorsed by, or maintained by the Supermemory team. The name reflects architectural inspiration, not a partnership.
-
-## ✨ Features
-
-- 🌍 **Multilingual Support** — LLM extracts memories and entities in the user's original language, while lexical deduplication uses multilingual stopword filtering and Unicode-aware tokenization to accurately process diverse character sets.
-- 📝 **LLM Semantic Extraction** — Extracts typed atomic memories, raw entity mentions, and temporal metadata from each conversation turn via an LLM subagent.
-- 🕸️ **Graph Memory** — Tracks canonical entities plus raw aliases, relationship edges (`updates` / `related`), and memory versioning.
-- 👤 **User Profiles** — Long-term durable memories + recent episodic context, automatically maintained and injected into the system prompt.
-- 🧹 **Automatic Forgetting** — Temporal expiration for episodic memories, chronological decay for unpinned episodes, and deferred LLM-driven entity merging in the background.
-- 🔍 **Hybrid Search** — BM25 keyword (FTS5) + graph-augmented multi-hop retrieval with MMR diversity re-ranking (penalizing candidates from the same search source). Superseded memories are filtered at the query level. Vector similarity (sqlite-vec) used when available.
-- ⚡ **Auto-Recall** — Injects relevant memories + user profile before every AI turn.
-- 🔌 **OpenClaw Runtime Integration** — Registers memory tools, a built-in memory search manager, and a pre-compaction memory flush plan.
-
 ## How It Works
 
-```mermaid
-flowchart TD
-    subgraph Conversation ["💬 Conversation Flow"]
-        direction LR
-        U([👤 User Message]) --> AI([🤖 AI Response])
-    end
+- **Auto-capture** — After each AI response, an LLM subagent extracts typed atomic memories (facts, episodes, preferences) and raw entity mentions from the turn, deduplicates them lexically and by vector similarity, then stores them in a local SQLite knowledge graph.
+- **Graph storage** — Memories are linked to canonical entities and connected by relationship edges: `updates` (newer fact supersedes older) and `related` (connected facts sharing entities).
+- **Background maintenance** — A periodic job merges entity aliases (e.g. "Ivan" / "Iván"), expires stale episodic memories, and backfills any missing embeddings.
+- **Auto-recall** — Before each AI turn, hybrid search (BM25 + vector + graph hops) retrieves the most relevant memories and your user profile, which are injected into the prompt context.
 
-    subgraph Extraction ["🧠 Multilingual Memory Engine"]
-        direction TB
-        Ext["Extract Facts, Episodes, Preferences"]
-        Dedup["Deduplication\n (Lexical Filter + Vector Match)"]
-        Embed["Embeddings API"]
-        
-        Ext --> Dedup
-        Dedup --> Embed
-    end
+## Sequence Diagrams
 
-    subgraph Storage ["🔗 SQLite Knowledge Graph"]
-        direction TB
-        DB_Mem[("💾 Memories\n(Text + Vector)")]
-        DB_Ent[("🏷️ Entities\n(Aliases & Canonical)")]
-        DB_Rel[("🔗 Relationships\n(Updates & Related)")]
-        
-        DB_Mem --- DB_Ent
-        DB_Mem --- DB_Rel
-    end
+### Memory Extraction & Storage
 
-    subgraph Retrieval ["🔎 Auto-Recall & Search"]
-        direction TB
-        HybSearch["🔦 Hybrid Search\n(BM25 Keyword + Vector + Graph Hops)"]
-        Rerank["⚖️ MMR Diversity Re-ranking"]
-        Profile["👤 User Profile\n(Pinned, Long-Term, Recent Context)"]
-        
-        HybSearch --> Rerank
-    end
+Triggered by the `agent_end` lifecycle event after every AI response.
 
-    %% Connections
-    AI -->|🎣 Auto-Capture Hook| Ext
-    Embed -->|💾 Store| DB_Mem
-    DB_Mem -->|⚙️ Extract Relationships| DB_Rel
-    DB_Mem -->|💧 Hydrate Profile| Profile
-    
-    U -.->|⚡ Auto-Recall Hook| HybSearch
-    DB_Mem -.-> HybSearch
-    Rerank -.->|📥 Inject Context| AI
-    Profile -.->|📥 Inject Context| AI
-```
+[Full diagram](docs/diagrams/auto-capture.md)
 
-1. **You talk to your AI.** Share preferences, mention projects, discuss problems.
-2. **Auto-capture** uses your configured LLM to extract typed atomic memories plus raw entity mentions from the last conversation turn.
-3. **Graph engine** stores those memories, maps mentions to canonical entities, and detects relationships:
-   - **Updates** — "Iván moved to Copenhagen" supersedes "Iván lives in Madrid"
-   - **Related** — "Iván works in a research team of 4" is connected to "Iván is an AI Scientist at Santander"
-4. **Background maintenance** can merge aliases like "Ivan" and "Iván" into the same canonical entity later.
-5. **Auto-recall** injects your user profile + relevant memories before each AI turn.
-6. **Automatic forgetting** cleans up expired episodic memories and removes stale unused episodes.
+### Auto-Recall — Context Injection before each Turn
+
+Triggered by the `before_prompt_build` lifecycle event before every AI turn.
+
+[Full diagram](docs/diagrams/auto-recall.md)
+
+### memory_store Tool — Manual Memory Storage
+
+Called explicitly by the AI agent when it decides to save something.
+
+[Full diagram](docs/diagrams/memory-store-tool.md)
+
+### Hybrid Search — memory_search Tool & Auto-Recall Detail
+
+Used by both the `memory_search` tool and the auto-recall hook.
+
+[Full diagram](docs/diagrams/hybrid-search.md)
+
+### Background Maintenance — ForgettingService
+
+Runs on a periodic timer (default: every 60 minutes) independently of conversation activity.
+
+[Full diagram](docs/diagrams/forgetting-service.md)
 
 ## 🚀 Quick Start
 

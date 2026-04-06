@@ -159,6 +159,11 @@ export function createMemoryStoreTool(ctx: ToolContext): ToolDefinition {
       }
 
       if (storedMemories.length === 0) {
+        // Fallback: store the raw input text directly without LLM extraction.
+        // No semanticMemory is provided here, so entity mentions cannot be linked
+        // (there is no NER path available without a successful extraction pass).
+        // Update-relationship resolution still runs via vector candidates if a
+        // semanticRuntime is present.
         const fallback = await processNewMemory(text, ctx.db, ctx.embeddings, {
           embeddingEnabled: ctx.cfg.embedding.enabled,
           memoryTypeOverride: memoryType,

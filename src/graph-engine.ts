@@ -85,6 +85,18 @@ export async function processNewMemory(
       const nearDuplicate = findNearDuplicate(vector, db);
       if (nearDuplicate) {
         db.bumpAccessCount(nearDuplicate.id);
+        // Link any new entity mentions to the existing memory so the graph stays
+        // complete even when a near-duplicate is detected and we return early.
+        const nearDupMentions = collectEntityMentions(
+          cleanedText,
+          options?.semanticMemory?.entities ?? [],
+        );
+        for (const mention of nearDupMentions) {
+          const normalized = normalizeEntityAliasText(mention.mention);
+          if (!normalized) continue;
+          const resolved = db.resolveEntityAlias(mention.mention, normalized, mention.kind);
+          db.linkAliasToMemory(nearDuplicate.id, resolved.alias.id);
+        }
         return nearDuplicate;
       }
     } catch (err) {
@@ -328,8 +340,9 @@ async function resolveUpdateRelationship(
   semanticRuntime: SemanticRuntimeLike | null,
   log?: SemanticLogLike,
 ): Promise<string | null> {
-  if (!semanticRuntime || !log) return null;
+  if (!semanticRuntime) return null;
   if (memory.memory_type === "episode") return null;
+  const effectiveLog: SemanticLogLike = log ?? { info: () => {}, warn: () => {} };
 
   const entityIds = db.getCanonicalEntityIdsForMemory(memory.id);
   const candidates = buildUpdateCandidates(memory, entityIds, db);
@@ -343,7 +356,7 @@ async function resolveUpdateRelationship(
     },
     candidates,
     semanticRuntime,
-    log,
+    effectiveLog,
   );
 
   const updateDecision = decisions.find((decision) => decision.relationType === "updates");
