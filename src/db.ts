@@ -81,6 +81,13 @@ type EmbeddingSignature = {
 	dimensions: number
 }
 
+type SchemaState = {
+	isEmpty: boolean
+	needsReset: boolean
+	needsWrite: boolean
+	needsFtsRebuild: boolean
+}
+
 const CURRENT_MEMORY_COLUMNS = [
 	"id",
 	"text",
@@ -125,6 +132,19 @@ const CURRENT_RELATIONSHIP_COLUMNS = [
 	"created_at",
 ] as const
 
+const PLUGIN_INDEX_NAMES = [
+	"idx_memories_type",
+	"idx_memories_superseded",
+	"idx_memories_expires",
+	"idx_entities_last_seen",
+	"idx_entities_merged_into",
+	"idx_entity_aliases_entity",
+	"idx_entity_aliases_normalized",
+	"idx_entity_mentions_alias",
+	"idx_relationships_source",
+	"idx_relationships_target",
+] as const
+
 const PLUGIN_OBJECT_NAMES = [
 	"memories_ai",
 	"memories_ad",
@@ -139,6 +159,7 @@ const PLUGIN_OBJECT_NAMES = [
 	"profile_cache",
 	"embedding_cache",
 	"embedding_signature",
+	...PLUGIN_INDEX_NAMES,
 ] as const
 
 const EMBEDDING_SIGNATURE_SCOPE = "active"
@@ -207,7 +228,10 @@ export class MemoryDB {
 		this.db = new sqlite.DatabaseSync(cfg.dbPath, {
 			allowExtension: cfg.embedding.enabled,
 		})
-		this.db.exec("PRAGMA journal_mode = WAL")
+		this.db.exec("PRAGMA busy_timeout = 5000")
+		if (this.getJournalMode() !== "wal") {
+			this.db.exec("PRAGMA journal_mode = WAL")
+		}
 		this.db.exec("PRAGMA foreign_keys = ON")
 		this.initSchema()
 		if (cfg.embedding.enabled) {
@@ -222,11 +246,30 @@ export class MemoryDB {
 		}
 	}
 
+	private getJournalMode(): string | null {
+		const row = this.db.prepare("PRAGMA journal_mode").get() as
+			| Record<string, unknown>
+			| undefined
+		const mode = row?.journal_mode
+		return typeof mode === "string" ? mode.toLowerCase() : null
+	}
+
 	private initSchema(): void {
-		if (this.schemaNeedsReset()) {
+		const schemaState = this.inspectSchemaState()
+		if (schemaState.needsReset) {
 			this.resetPluginSchema()
 		}
+		if (!schemaState.needsWrite) return
 
+		this.createSchemaArtifacts()
+		if (!schemaState.needsFtsRebuild) return
+
+		try {
+			this.db.exec(`INSERT INTO memories_fts(memories_fts) VALUES ('rebuild')`)
+		} catch {}
+	}
+
+	private createSchemaArtifacts(): void {
 		this.db.exec(`
       CREATE TABLE IF NOT EXISTS memories (
         id TEXT PRIMARY KEY,
@@ -342,13 +385,9 @@ export class MemoryDB {
           VALUES (new.rowid, new.id, new.text, new.memory_type);
       END;
     `)
-
-		try {
-			this.db.exec(`INSERT INTO memories_fts(memories_fts) VALUES ('rebuild')`)
-		} catch {}
 	}
 
-	private schemaNeedsReset(): boolean {
+	private inspectSchemaState(): SchemaState {
 		const objects = this.db
 			.prepare(
 				`SELECT name, sql FROM sqlite_master
@@ -359,7 +398,16 @@ export class MemoryDB {
 			sql: string | null
 		}>
 
-		if (objects.length === 0) return false
+		if (objects.length === 0) {
+			return {
+				isEmpty: true,
+				needsReset: false,
+				needsWrite: true,
+				needsFtsRebuild: false,
+			}
+		}
+
+		const names = new Set(objects.map((obj) => obj.name))
 
 		for (const required of [
 			"memories",
@@ -368,30 +416,86 @@ export class MemoryDB {
 			"entity_mentions",
 			"relationships",
 		]) {
-			if (!objects.some((obj) => obj.name === required)) {
-				return true
+			if (!names.has(required)) {
+				return {
+					isEmpty: false,
+					needsReset: true,
+					needsWrite: true,
+					needsFtsRebuild: false,
+				}
 			}
 		}
 
-		if (!this.tableColumnsMatch("memories", CURRENT_MEMORY_COLUMNS)) return true
-		if (!this.tableColumnsMatch("entities", CURRENT_ENTITY_COLUMNS)) return true
+		if (!this.tableColumnsMatch("memories", CURRENT_MEMORY_COLUMNS)) {
+			return {
+				isEmpty: false,
+				needsReset: true,
+				needsWrite: true,
+				needsFtsRebuild: false,
+			}
+		}
+		if (!this.tableColumnsMatch("entities", CURRENT_ENTITY_COLUMNS)) {
+			return {
+				isEmpty: false,
+				needsReset: true,
+				needsWrite: true,
+				needsFtsRebuild: false,
+			}
+		}
 		if (!this.tableColumnsMatch("entity_aliases", CURRENT_ENTITY_ALIAS_COLUMNS))
-			return true
+			return {
+				isEmpty: false,
+				needsReset: true,
+				needsWrite: true,
+				needsFtsRebuild: false,
+			}
 		if (
 			!this.tableColumnsMatch("entity_mentions", CURRENT_ENTITY_MENTION_COLUMNS)
 		)
-			return true
-		if (!this.tableColumnsMatch("relationships", CURRENT_RELATIONSHIP_COLUMNS))
-			return true
+			return {
+				isEmpty: false,
+				needsReset: true,
+				needsWrite: true,
+				needsFtsRebuild: false,
+			}
+		if (
+			!this.tableColumnsMatch("relationships", CURRENT_RELATIONSHIP_COLUMNS)
+		) {
+			return {
+				isEmpty: false,
+				needsReset: true,
+				needsWrite: true,
+				needsFtsRebuild: false,
+			}
+		}
 
 		const ftsSql =
 			objects.find((obj) => obj.name === "memories_fts")?.sql?.toLowerCase() ??
 			""
 		if (ftsSql.length > 0 && !ftsSql.includes("memory_type")) {
-			return true
+			return {
+				isEmpty: false,
+				needsReset: true,
+				needsWrite: true,
+				needsFtsRebuild: false,
+			}
 		}
 
-		return false
+		const needsWrite = PLUGIN_OBJECT_NAMES.some(
+			(name) => name !== "memories_vec" && !names.has(name),
+		)
+		const needsFtsRebuild =
+			!names.has("memories_fts") ||
+			!names.has("memories_ai") ||
+			!names.has("memories_ad") ||
+			!names.has("memories_au")
+
+		return {
+			isEmpty: false,
+			needsReset: false,
+			needsWrite,
+			needsFtsRebuild: needsWrite && needsFtsRebuild,
+		}
 	}
 
 	private tableColumnsMatch(
@@ -429,10 +533,10 @@ export class MemoryDB {
 		const storedSignature = this.getEmbeddingSignature()
 		const storedMemoryVectorDims = this.getStoredMemoryVectorDimensions()
 		const vectorTableDims = this.getStoredVectorTableDimensions()
+		const signatureMissing = storedSignature === null
 
 		const signatureChanged =
-			storedSignature !== null &&
-			!embeddingSignaturesMatch(storedSignature, expected)
+			!signatureMissing && !embeddingSignaturesMatch(storedSignature, expected)
 		const storedVectorDimsChanged =
 			storedMemoryVectorDims !== null &&
 			storedMemoryVectorDims !== expected.dimensions
@@ -441,9 +545,12 @@ export class MemoryDB {
 
 		if (signatureChanged || storedVectorDimsChanged || vectorTableDimsChanged) {
 			this.clearVectorState()
+			this.setEmbeddingSignature(expected)
+			return
 		}
-
-		this.setEmbeddingSignature(expected)
+		if (signatureMissing) {
+			this.setEmbeddingSignature(expected)
+		}
 	}
 
 	private getEmbeddingSignature(): EmbeddingSignature | null {
@@ -554,7 +661,9 @@ export class MemoryDB {
 				// in case vec0 is already available (e.g. statically linked)
 			}
 
-			this.createVectorTable()
+			if (this.getStoredVectorTableDimensions() === null) {
+				this.createVectorTable()
+			}
 			this.vecAvailable = true
 		} catch {
 			this.vecAvailable = false

@@ -1,6 +1,6 @@
 {
 	"name": "openclaw-memory-supermemory",
-	"version": "0.6.1",
+	"version": "0.6.3",
 	"type": "module",
 	"description": "Local graph-based memory plugin for OpenClaw with entity extraction, user profiles, and automatic forgetting — inspired by Supermemory",
 	"license": "MIT",
@@ -54,8 +54,9 @@
 		"lint:fix": "bunx @biomejs/biome check --write .",
 		"eval:longmemeval": "node --disable-warning=ExperimentalWarning --experimental-transform-types ./tests/integration/longmemeval/run.ts",
 		"test:integration:longmemeval": "node --disable-warning=ExperimentalWarning --experimental-transform-types ./tests/integration/longmemeval/run.ts",
-		"test": "echo 'no tests yet'",
-		"ci": "bun run check-types && bun run lint",
+		"test:lifecycle": "node --test --disable-warning=ExperimentalWarning --experimental-transform-types ./tests/lifecycle.registration.test.ts",
+		"test": "bun run test:lifecycle",
+		"ci": "bun run check-types && bun run lint && bun run test:lifecycle",
 		"pack:check": "npm pack --dry-run --cache ./.npm-cache",
 		"pack": "npm pack --cache ./.npm-cache"
 	},

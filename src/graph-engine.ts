@@ -1,3 +1,4 @@
+import { createRequire } from "node:module"
 import type { MemoryType, SupermemoryConfig } from "./config.ts"
 import type { MemoryDB, MemoryEntityMentionRow, MemoryRow } from "./db.ts"
 import type { EmbeddingProvider } from "./embeddings.ts"
@@ -17,7 +18,8 @@ const DEDUP_FTS_CANDIDATE_LIMIT = 12
 const UPDATE_VECTOR_CANDIDATE_LIMIT = 8
 const UPDATE_RESOLVER_CANDIDATE_LIMIT = 12
 
-import stopwordsIso from "stopwords-iso"
+const require = createRequire(import.meta.url)
+const stopwordsIso = require("stopwords-iso") as Record<string, string[]>
 
 const DEDUP_TOKEN_PATTERN =
 	/[\p{Letter}\p{Number}]+(?:[.@:/+-][\p{Letter}\p{Number}]+)*/gu
