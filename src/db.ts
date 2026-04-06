@@ -75,6 +75,12 @@ export type VectorBackfillStats = {
 	pendingBackfill: number
 }
 
+type EmbeddingSignature = {
+	providerId: string
+	modelId: string
+	dimensions: number
+}
+
 const CURRENT_MEMORY_COLUMNS = [
 	"id",
 	"text",
@@ -132,7 +138,21 @@ const PLUGIN_OBJECT_NAMES = [
 	"relationships",
 	"profile_cache",
 	"embedding_cache",
+	"embedding_signature",
 ] as const
+
+const EMBEDDING_SIGNATURE_SCOPE = "active"
+
+function embeddingSignaturesMatch(
+	left: EmbeddingSignature,
+	right: EmbeddingSignature,
+): boolean {
+	return (
+		left.providerId === right.providerId &&
+		left.modelId === right.modelId &&
+		left.dimensions === right.dimensions
+	)
+}
 
 function ensureDir(dirPath: string): void {
 	if (!fs.existsSync(dirPath)) {
@@ -192,6 +212,11 @@ export class MemoryDB {
 		this.initSchema()
 		if (cfg.embedding.enabled) {
 			this.tryLoadVec()
+			this.reconcileEmbeddingState({
+				providerId: cfg.embedding.provider,
+				modelId: cfg.embedding.model,
+				dimensions: vectorDims,
+			})
 		} else {
 			this.vecAvailable = false
 		}
@@ -267,6 +292,14 @@ export class MemoryDB {
         hash TEXT PRIMARY KEY,
         vector BLOB NOT NULL,
         created_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS embedding_signature (
+        scope TEXT PRIMARY KEY,
+        provider_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        dimensions INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
       );
 
       CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(memory_type);
@@ -383,9 +416,121 @@ export class MemoryDB {
       DROP TABLE IF EXISTS entity_mentions;
       DROP TABLE IF EXISTS entity_aliases;
       DROP TABLE IF EXISTS entities;
+      DROP TABLE IF EXISTS embedding_signature;
       DROP TABLE IF EXISTS embedding_cache;
       DROP TABLE IF EXISTS profile_cache;
       DROP TABLE IF EXISTS memories;
+    `)
+	}
+
+	// Provider, model, and dimension changes invalidate every stored vector, but
+	// the memories and graph edges are still valid and can be re-embedded safely.
+	private reconcileEmbeddingState(expected: EmbeddingSignature): void {
+		const storedSignature = this.getEmbeddingSignature()
+		const storedMemoryVectorDims = this.getStoredMemoryVectorDimensions()
+		const vectorTableDims = this.getStoredVectorTableDimensions()
+
+		const signatureChanged =
+			storedSignature !== null &&
+			!embeddingSignaturesMatch(storedSignature, expected)
+		const storedVectorDimsChanged =
+			storedMemoryVectorDims !== null &&
+			storedMemoryVectorDims !== expected.dimensions
+		const vectorTableDimsChanged =
+			vectorTableDims !== null && vectorTableDims !== expected.dimensions
+
+		if (signatureChanged || storedVectorDimsChanged || vectorTableDimsChanged) {
+			this.clearVectorState()
+		}
+
+		this.setEmbeddingSignature(expected)
+	}
+
+	private getEmbeddingSignature(): EmbeddingSignature | null {
+		const row = this.db
+			.prepare(
+				`SELECT provider_id, model_id, dimensions
+         FROM embedding_signature
+         WHERE scope = ?`,
+			)
+			.get(EMBEDDING_SIGNATURE_SCOPE) as
+			| {
+					provider_id: string
+					model_id: string
+					dimensions: number
+			  }
+			| undefined
+
+		if (!row) return null
+		return {
+			providerId: row.provider_id,
+			modelId: row.model_id,
+			dimensions: row.dimensions,
+		}
+	}
+
+	private setEmbeddingSignature(signature: EmbeddingSignature): void {
+		this.db
+			.prepare(
+				`INSERT OR REPLACE INTO embedding_signature (
+           scope,
+           provider_id,
+           model_id,
+           dimensions,
+           updated_at
+         ) VALUES (?, ?, ?, ?, ?)`,
+			)
+			.run(
+				EMBEDDING_SIGNATURE_SCOPE,
+				signature.providerId,
+				signature.modelId,
+				signature.dimensions,
+				Date.now(),
+			)
+	}
+
+	private getStoredMemoryVectorDimensions(): number | null {
+		const row = this.db
+			.prepare(
+				"SELECT length(vector) as bytes FROM memories WHERE vector IS NOT NULL LIMIT 1",
+			)
+			.get() as { bytes: number } | undefined
+
+		if (!row || typeof row.bytes !== "number") return null
+		if (row.bytes % Float64Array.BYTES_PER_ELEMENT !== 0) return 0
+		return row.bytes / Float64Array.BYTES_PER_ELEMENT
+	}
+
+	private getStoredVectorTableDimensions(): number | null {
+		const row = this.db
+			.prepare(
+				`SELECT sql FROM sqlite_master
+         WHERE name = 'memories_vec'`,
+			)
+			.get() as { sql: string | null } | undefined
+
+		const sql = row?.sql
+		if (!sql) return null
+		const match = sql.match(/vector\s+float\[(\d+)\]/i)
+		return match ? Number(match[1]) : null
+	}
+
+	private clearVectorState(): void {
+		this.db.exec("UPDATE memories SET vector = NULL WHERE vector IS NOT NULL")
+		this.db.exec("DELETE FROM embedding_cache")
+		this.db.exec("DROP TABLE IF EXISTS memories_vec")
+
+		if (this.vecAvailable) {
+			this.createVectorTable()
+		}
+	}
+
+	private createVectorTable(): void {
+		this.db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(
+        id TEXT PRIMARY KEY,
+        vector float[${this.vectorDims}] distance_metric=cosine
+      );
     `)
 	}
 
@@ -409,12 +554,7 @@ export class MemoryDB {
 				// in case vec0 is already available (e.g. statically linked)
 			}
 
-			this.db.exec(`
-        CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(
-          id TEXT PRIMARY KEY,
-          vector float[${this.vectorDims}] distance_metric=cosine
-        );
-      `)
+			this.createVectorTable()
 			this.vecAvailable = true
 		} catch {
 			this.vecAvailable = false

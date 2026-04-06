@@ -3,6 +3,7 @@ export type EmbeddingProviderKind = "ollama" | "openai-compatible"
 export type EmbeddingModelSpec = {
 	id: string
 	dimensions: number
+	hint?: string
 }
 
 export type EmbeddingProviderSpec = {
@@ -19,19 +20,63 @@ export type EmbeddingProviderSpec = {
 export const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 export const DEFAULT_EMBEDDING_PROVIDER = "ollama"
-export const DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
+export const DEFAULT_EMBEDDING_MODEL = "embeddinggemma"
 export const DEFAULT_OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
 
 export const OLLAMA_EMBEDDING_MODELS: readonly EmbeddingModelSpec[] = [
-	{ id: DEFAULT_EMBEDDING_MODEL, dimensions: 768 },
-	{ id: "mxbai-embed-large", dimensions: 1024 },
-	{ id: "all-minilm", dimensions: 384 },
-	{ id: "snowflake-arctic-embed", dimensions: 1024 },
+	{
+		id: DEFAULT_EMBEDDING_MODEL,
+		dimensions: 768,
+		hint: "Recommended local default",
+	},
+	{
+		id: "qwen3-embedding",
+		dimensions: 4096,
+		hint: "Long-context multilingual retrieval",
+	},
+	{
+		id: "bge-m3",
+		dimensions: 1024,
+		hint: "Popular multilingual heavy-duty option",
+	},
+	{
+		id: "all-minilm",
+		dimensions: 384,
+		hint: "Fast lightweight model",
+	},
+	{
+		id: "nomic-embed-text",
+		dimensions: 768,
+		hint: "Stable legacy default",
+	},
+	{
+		id: "snowflake-arctic-embed2",
+		dimensions: 1024,
+		hint: "Frontier multilingual model",
+	},
+	{
+		id: "mxbai-embed-large",
+		dimensions: 1024,
+		hint: "High-quality large encoder",
+	},
+	{
+		id: "snowflake-arctic-embed",
+		dimensions: 1024,
+		hint: "Legacy Snowflake encoder",
+	},
 ]
 
 export const OPENAI_EMBEDDING_MODELS: readonly EmbeddingModelSpec[] = [
-	{ id: DEFAULT_OPENAI_EMBEDDING_MODEL, dimensions: 1536 },
-	{ id: "text-embedding-3-large", dimensions: 3072 },
+	{
+		id: DEFAULT_OPENAI_EMBEDDING_MODEL,
+		dimensions: 1536,
+		hint: "Default cost/performance choice",
+	},
+	{
+		id: "text-embedding-3-large",
+		dimensions: 3072,
+		hint: "Highest-quality OpenAI option",
+	},
 ]
 
 export const EMBEDDING_PROVIDER_SPECS: readonly EmbeddingProviderSpec[] = [

@@ -19,23 +19,43 @@ function hashText(text: string): string {
 	return createHash("sha256").update(text).digest("hex")
 }
 
+function resolveRequestedDimensions(
+	value: number | undefined,
+): number | undefined {
+	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+		return undefined
+	}
+	return value
+}
+
 class OllamaEmbeddingProvider implements EmbeddingProvider {
 	readonly providerId = "ollama"
 	readonly modelId: string
 	readonly dimensions: number
 	private readonly baseUrl: string
+	private readonly requestedDimensions?: number
 
-	constructor(model: string, dims: number, baseUrl?: string) {
+	constructor(
+		model: string,
+		dims: number,
+		options?: {
+			baseUrl?: string
+			requestedDimensions?: number
+		},
+	) {
 		this.modelId = model
 		this.dimensions = dims
-		this.baseUrl = baseUrl ?? DEFAULT_OLLAMA_BASE_URL
+		this.baseUrl = options?.baseUrl ?? DEFAULT_OLLAMA_BASE_URL
+		this.requestedDimensions = resolveRequestedDimensions(
+			options?.requestedDimensions,
+		)
 	}
 
 	async embed(text: string): Promise<Float64Array> {
 		const response = await fetch(`${this.baseUrl}/api/embed`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ model: this.modelId, input: text }),
+			body: JSON.stringify(this.buildRequestBody(text)),
 		})
 
 		if (!response.ok) {
@@ -54,7 +74,7 @@ class OllamaEmbeddingProvider implements EmbeddingProvider {
 		const response = await fetch(`${this.baseUrl}/api/embed`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ model: this.modelId, input: texts }),
+			body: JSON.stringify(this.buildRequestBody(texts)),
 		})
 
 		if (!response.ok) {
@@ -72,6 +92,17 @@ class OllamaEmbeddingProvider implements EmbeddingProvider {
 		}
 		return data.embeddings.map((e) => new Float64Array(e))
 	}
+
+	private buildRequestBody(input: string | string[]): Record<string, unknown> {
+		const body: Record<string, unknown> = {
+			model: this.modelId,
+			input,
+		}
+		if (this.requestedDimensions !== undefined) {
+			body.dimensions = this.requestedDimensions
+		}
+		return body
+	}
 }
 
 class OpenAICompatEmbeddingProvider implements EmbeddingProvider {
@@ -80,19 +111,26 @@ class OpenAICompatEmbeddingProvider implements EmbeddingProvider {
 	readonly dimensions: number
 	private readonly baseUrl: string
 	private readonly apiKey: string
+	private readonly requestedDimensions?: number
 
 	constructor(
 		provider: string,
 		model: string,
 		dims: number,
 		apiKey: string,
-		baseUrl?: string,
+		options?: {
+			baseUrl?: string
+			requestedDimensions?: number
+		},
 	) {
 		this.providerId = provider
 		this.modelId = model
 		this.dimensions = dims
 		this.apiKey = apiKey
-		this.baseUrl = baseUrl ?? DEFAULT_OPENAI_BASE_URL
+		this.baseUrl = options?.baseUrl ?? DEFAULT_OPENAI_BASE_URL
+		this.requestedDimensions = resolveRequestedDimensions(
+			options?.requestedDimensions,
+		)
 	}
 
 	async embed(text: string): Promise<Float64Array> {
@@ -105,13 +143,21 @@ class OpenAICompatEmbeddingProvider implements EmbeddingProvider {
 	}
 
 	private async callApi(input: string[]): Promise<Float64Array[]> {
+		const body: Record<string, unknown> = {
+			model: this.modelId,
+			input,
+		}
+		if (this.requestedDimensions !== undefined) {
+			body.dimensions = this.requestedDimensions
+		}
+
 		const response = await fetch(`${this.baseUrl}/embeddings`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
 				Authorization: `Bearer ${this.apiKey}`,
 			},
-			body: JSON.stringify({ model: this.modelId, input }),
+			body: JSON.stringify(body),
 		})
 
 		if (!response.ok) {
@@ -183,7 +229,7 @@ class CachedEmbeddingProvider implements EmbeddingProvider {
 	}
 
 	private cacheKey(text: string): string {
-		return `${this.inner.providerId}:${this.inner.modelId}:${hashText(text)}`
+		return `${this.inner.providerId}:${this.inner.modelId}:${this.inner.dimensions}:${hashText(text)}`
 	}
 }
 
@@ -192,6 +238,8 @@ export function createEmbeddingProvider(
 	vectorDims: number,
 	db: MemoryDB,
 ): EmbeddingProvider {
+	const requestedDimensions = resolveRequestedDimensions(config.dimensions)
+
 	if (!config.enabled) {
 		return {
 			providerId: "none",
@@ -209,11 +257,10 @@ export function createEmbeddingProvider(
 	let inner: EmbeddingProvider
 
 	if (isOllamaProvider(config.provider)) {
-		inner = new OllamaEmbeddingProvider(
-			config.model,
-			vectorDims,
-			config.baseUrl,
-		)
+		inner = new OllamaEmbeddingProvider(config.model, vectorDims, {
+			baseUrl: config.baseUrl,
+			requestedDimensions,
+		})
 	} else {
 		if (!config.apiKey) {
 			throw new Error(
@@ -225,7 +272,10 @@ export function createEmbeddingProvider(
 			config.model,
 			vectorDims,
 			config.apiKey,
-			config.baseUrl,
+			{
+				baseUrl: config.baseUrl,
+				requestedDimensions,
+			},
 		)
 	}
 

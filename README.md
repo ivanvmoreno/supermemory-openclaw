@@ -21,35 +21,29 @@ Sequence diagrams available in [`docs/diagrams/`](docs/diagrams/).
 openclaw plugins install openclaw-memory-supermemory
 ```
 
-### Step 2: Configure OpenClaw
+### Step 2: Run the setup wizard
 
-Edit `~/.openclaw/openclaw.json` and add the plugin entry:
-
-```json5
-{
-  "plugins": {
-    "allow": ["openclaw-memory-supermemory"],
-    "entries": {
-      "openclaw-memory-supermemory": {
-        "enabled": true,
-        "config": {
-          "embedding": {
-            "provider": "openai",
-            "model": "text-embedding-3-small",
-            "apiKey": "${OPENAI_API_KEY}"
-          }
-        }
-      }
-    }
-  }
-}
-```
+```bash
+openclaw supermemory configure
+``` ̰
 
 ### Step 3: Restart OpenClaw
 
 Restart the OpenClaw gateway for the plugin to load.
 
-### Step 4: Verify it works
+```bash
+openclaw gateway restart
+```
+
+### Step 4: Check the saved configuration
+
+```bash
+openclaw supermemory status
+```
+
+You should see a summary of the plugin state, embedding provider, model, and database path.
+
+### Step 5: Verify it works
 
 ```bash
 openclaw supermemory stats
@@ -73,14 +67,20 @@ Supported providers and auto-detected dimensions:
 
 | Model | Provider | Dimensions |
 |-------|----------|-----------|
+| `embeddinggemma` | Ollama | 768 |
+| `qwen3-embedding` | Ollama | 4096 |
+| `bge-m3` | Ollama | 1024 |
+| `all-minilm` | Ollama | 384 |
 | `nomic-embed-text` | Ollama | 768 |
+| `snowflake-arctic-embed2` | Ollama | 1024 |
+| `mxbai-embed-large` | Ollama | 1024 |
+| `snowflake-arctic-embed` | Ollama | 1024 |
 | `text-embedding-3-small` | OpenAI | 1536 |
 | `text-embedding-3-large` | OpenAI | 3072 |
-| `mxbai-embed-large` | Ollama | 1024 |
-| `all-minilm` | Ollama | 384 |
-| `snowflake-arctic-embed` | Ollama | 1024 |
 
-Set `provider` to `"ollama"` or `"openai"`. Any OpenAI-compatible endpoint also works via `baseUrl`. For unlisted models, set `embedding.dimensions` explicitly.
+Set `provider` to `"ollama"` or `"openai"`. Any OpenAI-compatible endpoint also works via `baseUrl`.
+
+For unlisted models, set `embedding.dimensions` explicitly. When you do, the plugin forwards that size to providers that support variable-width embeddings and rebuilds vector-state under the new dimension.
 
 ## AI Tools
 
@@ -137,7 +137,9 @@ Because `sqlite-vec` is bundled with OpenClaw's built-in memory system, the plug
 
 If you prefer to avoid embedding work entirely, set `embedding.enabled: false` in your configuration. That disables embedding generation, vector retrieval, and vector-based deduplication while preserving any existing stored vectors on disk.
 
-When you turn embeddings back on later, the plugin starts a background backfill. It reindexes any stored vectors first, then embeds older active memories that were captured while embeddings were disabled. Startup is not blocked while this runs.
+> When you turn embeddings back on later, the plugin starts a background backfill. It reindexes any stored vectors first, then embeds older active memories that were captured while embeddings were disabled. Startup is not blocked while this runs.
+>
+> If you change the embedding provider, model, or explicit dimensions, the plugin clears only its stored vector-state and then backfills under the new embedding space. Memory texts, entities, and relationships stay intact.
 
 ## Configuration Reference
 
@@ -149,10 +151,10 @@ All settings are optional. The plugin now exposes only the operational knobs tha
 |--------|------|---------|-------------|
 | `embedding.enabled` | boolean | `true` | Enable or disable embedding generation, vector retrieval, and vector deduplication |
 | `embedding.provider` | string | `"ollama"` | Embedding provider (`ollama`, `openai`, etc.) |
-| `embedding.model` | string | `"nomic-embed-text"` | Embedding model name |
+| `embedding.model` | string | `"embeddinggemma"` | Embedding model name |
 | `embedding.apiKey` | string | — | API key (cloud providers only, supports `${ENV_VAR}` syntax) |
 | `embedding.baseUrl` | string | — | Custom API base URL |
-| `embedding.dimensions` | number | auto | Vector dimensions (auto-detected for known models) |
+| `embedding.dimensions` | number | auto | Override vector dimensions and request that size from providers that support it |
 | `autoCapture` | boolean | `true` | Auto-capture memories from conversations |
 | `captureMode` | string | `"extract"` | `"extract"` (LLM semantic extraction) or `"off"` (disable auto-capture) |
 | `autoRecall` | boolean | `true` | Auto-inject memories + profile into context |

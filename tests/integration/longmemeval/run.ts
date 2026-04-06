@@ -95,7 +95,7 @@ type RunResult = {
 
 const FALLBACK_QA_MODEL = "openai/gpt-4o"
 const FALLBACK_OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
-const FALLBACK_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text"
+const FALLBACK_OLLAMA_EMBEDDING_MODEL = "embeddinggemma"
 const FALLBACK_SOURCE_STATE_DIR = "~/.openclaw"
 const FALLBACK_MAX_RECALL_RESULTS = 8
 const FALLBACK_OFFICIAL_REPO = "/tmp/LongMemEval"
