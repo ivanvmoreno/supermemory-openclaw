@@ -1,4 +1,4 @@
-# 🧠 Supermemory OpenClaw Plugin
+﻿# 🧠 Supermemory OpenClaw Plugin
 
 Local graph-based memory plugin for [OpenClaw](https://github.com/nichochar/openclaw) — inspired by [Supermemory](https://supermemory.ai). Runs entirely on your machine with no cloud dependencies.
 
@@ -96,6 +96,8 @@ The AI uses these tools autonomously:
 ## CLI Commands
 
 ```bash
+openclaw supermemory configure          # Interactive setup wizard
+openclaw supermemory status             # Show current configuration
 openclaw supermemory stats              # Show memory statistics
 openclaw supermemory search <query>     # Search memories
 openclaw supermemory search "<term>" --limit 5
@@ -103,6 +105,27 @@ openclaw supermemory profile            # View user profile
 openclaw supermemory profile --rebuild  # Force rebuild profile
 openclaw supermemory wipe --confirm     # Delete all memories
 ```
+
+### Interactive Setup
+
+Run `openclaw supermemory configure` for a guided wizard that reads your existing `~/.openclaw/openclaw.json` and writes the plugin entry back after prompting for:
+
+- Plugin enabled/disabled
+- Auto-capture and auto-recall toggles
+- Embedding provider, model, API key, and base URL
+- Custom database path
+
+Run `openclaw supermemory status` at any time to print a summary of the current configuration.
+
+## Slash Commands
+
+Three slash commands are registered for quick in-chat memory access:
+
+| Command | Description |
+|---------|-------------|
+| `/remember <text>` | Store a memory immediately, bypassing auto-capture |
+| `/recall <query>` | Run a hybrid search and display matching memories |
+| `/forget <description>` | Delete a memory by description; auto-deletes on high-confidence single match, otherwise lists candidates |
 
 ## Vector Search
 
@@ -229,7 +252,9 @@ openclaw-memory-supermemory/
 │   ├── forgetting.ts           # Expiration, stale-episode cleanup, deferred entity merging
 │   ├── tools.ts                # Agent tools (search, store, forget, profile)
 │   ├── hooks.ts                # Auto-recall + guarded auto-capture hooks
-│   └── cli.ts                  # CLI commands
+│   ├── cli.ts                  # CLI commands + slash command registration
+│   ├── configure.ts            # Interactive setup wizard + status command
+│   └── logger.ts               # Named, debug-aware plugin logger
 ```
 
 ### Storage
@@ -270,3 +295,4 @@ What the runner does:
 4. Imports each benchmark instance into a fresh plugin DB
 5. Asks the benchmark question through `openclaw agent --local`
 6. Writes a `predictions.jsonl` file plus a run summary JSON
+
