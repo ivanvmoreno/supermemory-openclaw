@@ -115,15 +115,17 @@ export function setSupermemoryPluginEntry(
 	const plugins = asObject(root.plugins)
 	const entries = asObject(plugins.entries)
 	const existingEntry = asObject(entries[PLUGIN_ID])
+	const mergedConfig = {
+		...asObject(existingEntry.config),
+		...config,
+	}
+	delete mergedConfig.captureMode
 	const nextEntries = {
 		...entries,
 		[PLUGIN_ID]: {
 			...existingEntry,
 			enabled,
-			config: {
-				...asObject(existingEntry.config),
-				...config,
-			},
+			config: mergedConfig,
 		},
 	}
 	return {

@@ -11,10 +11,7 @@ import { processNewMemory } from "./graph-engine.ts"
 import type { PluginLogger } from "./logger.ts"
 import { getOrBuildProfile, type UserProfile } from "./profile-builder.ts"
 import { hybridSearch, resolveSearchMode } from "./search.ts"
-import type {
-	SemanticSubagentRuntime,
-	SemanticTaskScope,
-} from "./semantic-runtime.ts"
+import type { SemanticSubagentRuntime } from "./semantic-runtime.ts"
 
 type ToolResult = {
 	content: Array<{ type: string; text: string }>
@@ -52,18 +49,6 @@ export type ToolContext = {
 const FORGET_SEARCH_CANDIDATE_LIMIT = 5
 const FORGET_SEARCH_MIN_SCORE = 0.5
 const FORGET_AUTO_DELETE_MIN_SCORE = 0.8
-
-export function resolveMemoryStoreSemanticScope(
-	toolCtx: MemoryStoreToolRuntimeContext | undefined,
-	toolCallId: string,
-): SemanticTaskScope {
-	return {
-		agentId: toolCtx?.agentId,
-		parentSessionKey: toolCtx?.sessionKey,
-		scopeKey:
-			toolCallId || toolCtx?.sessionId || toolCtx?.sessionKey || undefined,
-	}
-}
 
 export function createMemorySearchTool(ctx: ToolContext): ToolDefinition {
 	const searchMode = resolveSearchMode(ctx.cfg, ctx.db)
@@ -167,7 +152,14 @@ export function createMemoryStoreTool(
 		async execute(_toolCallId, params) {
 			const semanticScope =
 				ctx.semanticRuntime !== null && ctx.semanticRuntime !== undefined
-					? resolveMemoryStoreSemanticScope(toolCtx, _toolCallId)
+					? {
+							agentId: toolCtx?.agentId,
+							scopeKey:
+								_toolCallId ||
+								toolCtx?.sessionId ||
+								toolCtx?.sessionKey ||
+								undefined,
+						}
 					: null
 			const text = params.text as string
 			const memoryType = params.memoryType as MemoryType | undefined

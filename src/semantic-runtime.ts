@@ -30,7 +30,6 @@ export type SemanticLogger = {
 
 export type SemanticTaskScope = {
 	agentId?: string
-	parentSessionKey?: string
 	scopeKey?: string
 }
 
@@ -50,7 +49,7 @@ function normalizeAgentId(agentId?: string): string {
 	return normalized || DEFAULT_AGENT_ID
 }
 
-export function normalizeSemanticTaskSlug(taskPrefix: string): string {
+function normalizeSemanticTaskSlug(taskPrefix: string): string {
 	const sanitized = taskPrefix
 		.trim()
 		.toLowerCase()
@@ -62,32 +61,22 @@ export function normalizeSemanticTaskSlug(taskPrefix: string): string {
 	return sanitized || DEFAULT_TASK_SLUG
 }
 
-function buildScopeHash(scope: SemanticTaskScope): string {
-	const parts = [scope.parentSessionKey?.trim(), scope.scopeKey?.trim()].filter(
-		(value): value is string => Boolean(value),
-	)
-	if (parts.length === 0) return DEFAULT_SCOPE_HASH
+function buildScopeHash(scopeKey?: string): string {
+	const normalized = scopeKey?.trim()
+	if (!normalized) return DEFAULT_SCOPE_HASH
 
-	return createHash("sha256")
-		.update(parts.join("\n"))
-		.digest("hex")
-		.slice(0, 16)
+	return createHash("sha256").update(normalized).digest("hex").slice(0, 16)
 }
 
-export function buildSemanticSubagentSessionKey(params: {
+function buildSemanticSubagentSessionKey(params: {
 	taskPrefix: string
-	agentId?: string
-	parentSessionKey?: string
-	scopeKey?: string
+	semanticScope?: SemanticTaskScope | null
 }): string {
-	const agentId = normalizeAgentId(params.agentId)
+	const agentId = normalizeAgentId(params.semanticScope?.agentId)
 	const taskSlug = normalizeSemanticTaskSlug(params.taskPrefix)
-	const scopeHash = buildScopeHash({
-		parentSessionKey: params.parentSessionKey,
-		scopeKey: params.scopeKey,
-	})
+	const scopeHash = buildScopeHash(params.semanticScope?.scopeKey)
 
-	return `agent:${agentId}:subagent:supermemory:${taskSlug}:${scopeHash}`
+	return `agent:${agentId}:subagent:supermemory:${taskSlug}:${scopeHash}:run:${randomUUID()}`
 }
 
 export async function runSubagentJsonTask(params: {
@@ -96,17 +85,12 @@ export async function runSubagentJsonTask(params: {
 	message: string
 	systemPrompt: string
 	timeoutMs?: number
-	sessionMessageLimit?: number
-	agentId?: string
-	parentSessionKey?: string
-	scopeKey?: string
+	semanticScope?: SemanticTaskScope | null
 	log?: SemanticLogger
 }): Promise<string | null> {
 	const sessionKey = buildSemanticSubagentSessionKey({
 		taskPrefix: params.taskPrefix,
-		agentId: params.agentId,
-		parentSessionKey: params.parentSessionKey,
-		scopeKey: params.scopeKey,
+		semanticScope: params.semanticScope,
 	})
 	const idempotencyKey = `supermemory-${normalizeSemanticTaskSlug(params.taskPrefix)}-${randomUUID()}`
 
@@ -130,7 +114,7 @@ export async function runSubagentJsonTask(params: {
 
 		const { messages } = await params.runtime.getSessionMessages({
 			sessionKey,
-			limit: params.sessionMessageLimit ?? DEFAULT_SESSION_MESSAGE_LIMIT,
+			limit: DEFAULT_SESSION_MESSAGE_LIMIT,
 		})
 
 		return extractLatestAssistantText(messages)

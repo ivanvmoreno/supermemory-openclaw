@@ -170,7 +170,6 @@ All settings are optional. The plugin now exposes only the operational knobs tha
 | `embedding.baseUrl` | string | — | Custom API base URL |
 | `embedding.dimensions` | number | auto | Override vector dimensions and request that size from providers that support it |
 | `autoCapture` | boolean | `true` | Auto-capture memories from conversations |
-| `captureMode` | string | `"extract"` | `"extract"` (LLM semantic extraction) or `"off"` (disable auto-capture) |
 | `autoRecall` | boolean | `true` | Auto-inject memories + profile into context |
 | `dbPath` | string | `~/.openclaw/memory/supermemory.db` | SQLite database path |
 | `debug` | boolean | `false` | Enable verbose logging |
@@ -242,7 +241,7 @@ Each extracted memory is stored separately with:
 
 Those raw mentions are linked to canonical entities later, so the system can preserve original surface forms while still grouping aliases over time.
 
-Set `captureMode: "off"` to disable auto-capture entirely.
+Set `autoCapture: false` to disable auto-capture entirely.
 
 ## Architecture
 

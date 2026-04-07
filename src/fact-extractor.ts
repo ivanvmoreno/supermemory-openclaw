@@ -103,9 +103,7 @@ Return only valid JSON. No markdown, no prose, no comments.`
 			taskPrefix: "__supermemory-extract",
 			message: turnText,
 			systemPrompt,
-			agentId: options?.semanticScope?.agentId,
-			parentSessionKey: options?.semanticScope?.parentSessionKey,
-			scopeKey: options?.semanticScope?.scopeKey,
+			semanticScope: options?.semanticScope,
 			log,
 		})
 
@@ -181,9 +179,7 @@ Rules:
 			taskPrefix: "__supermemory-relate",
 			message: payload,
 			systemPrompt,
-			agentId: options?.semanticScope?.agentId,
-			parentSessionKey: options?.semanticScope?.parentSessionKey,
-			scopeKey: options?.semanticScope?.scopeKey,
+			semanticScope: options?.semanticScope,
 			log,
 		})
 
@@ -258,9 +254,7 @@ Rules:
 			taskPrefix: "__supermemory-entity-merge",
 			message: payload,
 			systemPrompt,
-			agentId: options?.semanticScope?.agentId,
-			parentSessionKey: options?.semanticScope?.parentSessionKey,
-			scopeKey: options?.semanticScope?.scopeKey,
+			semanticScope: options?.semanticScope,
 			log,
 		})
 

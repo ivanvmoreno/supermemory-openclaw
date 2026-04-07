@@ -18,15 +18,12 @@ export type EmbeddingConfig = {
 export type MemoryType = (typeof MEMORY_TYPES)[number]
 export const MEMORY_TYPES = ["fact", "preference", "episode"] as const
 
-export type CaptureMode = "extract" | "off"
-
 export type RelationType = "updates" | "related"
 
 export type SupermemoryConfig = {
 	embedding: EmbeddingConfig
 	autoCapture: boolean
 	autoRecall: boolean
-	captureMode: CaptureMode
 	profileFrequency: number
 	maxLongTermItems: number
 	maxRecentItems: number
@@ -154,7 +151,6 @@ export function parseSupermemoryConfig(value: unknown): SupermemoryConfig {
 		embedding: { enabled, provider, model, apiKey, baseUrl, dimensions },
 		autoCapture: cfg.autoCapture !== false,
 		autoRecall: cfg.autoRecall !== false,
-		captureMode: cfg.captureMode === "off" ? "off" : "extract",
 		profileFrequency: clampNumber(
 			cfg.profileFrequency,
 			DEFAULT_PROFILE_FREQUENCY,
@@ -287,7 +283,6 @@ export const supermemoryConfigSchema = {
 				},
 			},
 			autoCapture: { type: "boolean" },
-			captureMode: { type: "string", enum: ["extract", "off"] },
 			autoRecall: { type: "boolean" },
 			profileFrequency: { type: "number", minimum: 1, maximum: 1000 },
 			maxLongTermItems: { type: "number", minimum: 1 },
