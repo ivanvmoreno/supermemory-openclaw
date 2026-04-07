@@ -66,6 +66,17 @@ Relationships:       0
 
 Zero counts are normal on first run.
 
+### Upgrade Note
+
+If startup fails after upgrading, reinstalling, or switching between older
+builds, wipe the memory database and let the plugin recreate it:
+
+```bash
+openclaw supermemory wipe --confirm
+```
+
+If you use a custom `dbPath`, delete that SQLite file instead.
+
 ## Embedding Providers
 
 Supported providers and auto-detected dimensions:

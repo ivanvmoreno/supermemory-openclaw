@@ -19,13 +19,6 @@ import {
 	type ToolContext,
 } from "./src/tools.ts"
 
-type RuntimeModeAwarePluginApi = OpenClawPluginApi & {
-	registrationMode?: "full" | "setup-only" | "setup-runtime" | "cli-metadata"
-	runtime?: {
-		subagent?: unknown
-	}
-}
-
 const SUPERMEMORY_CLI_REGISTRATION = {
 	commands: ["supermemory"],
 	descriptors: [
@@ -51,7 +44,8 @@ function registerFull(api: OpenClawPluginApi): void {
 		: 0
 	const db = new MemoryDB(cfg, vectorDims)
 	const embeddings = createEmbeddingProvider(cfg.embedding, vectorDims, db)
-	const subagent = (api as RuntimeModeAwarePluginApi).runtime?.subagent ?? null
+	const subagent =
+		(api.runtime as { subagent?: unknown } | undefined)?.subagent ?? null
 
 	const state = { interactionCount: 0 }
 	const log = createPluginLogger(api.logger, "memory-supermemory", cfg.debug)
@@ -101,154 +95,152 @@ function registerFull(api: OpenClawPluginApi): void {
 		return lines
 	})
 
-	if (typeof api.registerMemoryFlushPlan === "function")
-		api.registerMemoryFlushPlan((params) => {
-			const flushCfg = (params.cfg as Record<string, any>)?.agents?.defaults
-				?.compaction?.memoryFlush
-			if (flushCfg?.enabled === false) return null
+	api.registerMemoryFlushPlan((params) => {
+		const flushCfg = (params.cfg as Record<string, any>)?.agents?.defaults
+			?.compaction?.memoryFlush
+		if (flushCfg?.enabled === false) return null
 
-			const softThresholdTokens =
-				typeof flushCfg?.softThresholdTokens === "number"
-					? flushCfg.softThresholdTokens
-					: 4000
-			const forceFlushTranscriptBytes = 2 * 1024 * 1024
-			const reserveTokensFloor =
-				typeof (params.cfg as Record<string, any>)?.agents?.defaults?.compaction
-					?.reserveTokensFloor === "number"
-					? (params.cfg as Record<string, any>).agents.defaults.compaction
-							.reserveTokensFloor
-					: 8192
+		const softThresholdTokens =
+			typeof flushCfg?.softThresholdTokens === "number"
+				? flushCfg.softThresholdTokens
+				: 4000
+		const forceFlushTranscriptBytes = 2 * 1024 * 1024
+		const reserveTokensFloor =
+			typeof (params.cfg as Record<string, any>)?.agents?.defaults?.compaction
+				?.reserveTokensFloor === "number"
+				? (params.cfg as Record<string, any>).agents.defaults.compaction
+						.reserveTokensFloor
+				: 8192
 
-			return {
-				softThresholdTokens,
-				forceFlushTranscriptBytes,
-				reserveTokensFloor,
-				prompt:
-					"Pre-compaction memory flush. Use memory_store to save any important context, " +
-					"facts, decisions, or preferences from this conversation that should be remembered " +
-					"long-term. The graph memory engine will handle entity extraction and relationships. " +
-					"If nothing to store, reply with \u2300.",
-				systemPrompt:
-					"Pre-compaction memory flush turn. The session is near auto-compaction. " +
-					"Use memory_store to capture durable memories. You may reply, but usually \u2300 is correct.",
-				relativePath: "memory/supermemory-flush.md",
-			}
-		})
+		return {
+			softThresholdTokens,
+			forceFlushTranscriptBytes,
+			reserveTokensFloor,
+			prompt:
+				"Pre-compaction memory flush. Use memory_store to save any important context, " +
+				"facts, decisions, or preferences from this conversation that should be remembered " +
+				"long-term. The graph memory engine will handle entity extraction and relationships. " +
+				"If nothing to store, reply with \u2300.",
+			systemPrompt:
+				"Pre-compaction memory flush turn. The session is near auto-compaction. " +
+				"Use memory_store to capture durable memories. You may reply, but usually \u2300 is correct.",
+			relativePath: "memory/supermemory-flush.md",
+		}
+	})
 
-	if (typeof api.registerMemoryRuntime === "function")
-		api.registerMemoryRuntime({
-			async getMemorySearchManager() {
-				try {
-					const { hybridSearch } = await import("./src/search.ts")
-					const manager = {
-						async search(
-							query: string,
-							opts?: {
-								maxResults?: number
-								minScore?: number
-								sessionKey?: string
+	api.registerMemoryRuntime({
+		async getMemorySearchManager() {
+			try {
+				const { hybridSearch } = await import("./src/search.ts")
+				const manager = {
+					async search(
+						query: string,
+						opts?: {
+							maxResults?: number
+							minScore?: number
+							sessionKey?: string
+						},
+					) {
+						const results = await hybridSearch(query, db, embeddings, cfg, {
+							maxResults: opts?.maxResults,
+							minScore: opts?.minScore,
+						})
+						return results.map((r) => ({
+							path: `supermemory://${r.memory.id}`,
+							startLine: 0,
+							endLine: 0,
+							score: r.score,
+							snippet: r.memory.text,
+							source: "memory" as const,
+						}))
+					},
+					async readFile(params: {
+						relPath: string
+						from?: number
+						lines?: number
+					}) {
+						const idMatch = params.relPath.match(/^supermemory:\/\/(.+)$/)
+						if (idMatch) {
+							const memory = db.getMemory(idMatch[1])
+							if (memory) {
+								return { text: memory.text, path: params.relPath }
+							}
+						}
+						return { text: "", path: params.relPath }
+					},
+					status() {
+						const stats = db.stats()
+						const vectorStats = db.getVectorBackfillStats()
+						const searchMode = resolveSearchMode(cfg, db)
+						return {
+							backend: "builtin" as const,
+							provider: cfg.embedding.provider,
+							model: cfg.embedding.model,
+							files: stats.activeMemories,
+							chunks: stats.totalMemories,
+							dirty: false,
+							dbPath: resolvedDbPath,
+							sources: ["memory" as const],
+							vector: {
+								enabled: cfg.embedding.enabled,
+								available: cfg.embedding.enabled && db.isVectorAvailable,
+								dims: cfg.embedding.enabled ? vectorDims : null,
+								indexed: cfg.embedding.enabled ? vectorStats.indexed : 0,
+								pendingBackfill: cfg.embedding.enabled
+									? vectorStats.pendingBackfill
+									: 0,
 							},
-						) {
-							const results = await hybridSearch(query, db, embeddings, cfg, {
-								maxResults: opts?.maxResults,
-								minScore: opts?.minScore,
-							})
-							return results.map((r) => ({
-								path: `supermemory://${r.memory.id}`,
-								startLine: 0,
-								endLine: 0,
-								score: r.score,
-								snippet: r.memory.text,
-								source: "memory" as const,
-							}))
-						},
-						async readFile(params: {
-							relPath: string
-							from?: number
-							lines?: number
-						}) {
-							const idMatch = params.relPath.match(/^supermemory:\/\/(.+)$/)
-							if (idMatch) {
-								const memory = db.getMemory(idMatch[1])
-								if (memory) {
-									return { text: memory.text, path: params.relPath }
-								}
-							}
-							return { text: "", path: params.relPath }
-						},
-						status() {
-							const stats = db.stats()
-							const vectorStats = db.getVectorBackfillStats()
-							const searchMode = resolveSearchMode(cfg, db)
+							custom: {
+								engine: "supermemory",
+								entities: stats.entities,
+								relationships: stats.relationships,
+								searchMode,
+							},
+						}
+					},
+					async sync() {
+						// No-op — supermemory captures memories via hooks/tools, not file sync
+					},
+					async probeEmbeddingAvailability() {
+						if (!cfg.embedding.enabled) {
 							return {
-								backend: "builtin" as const,
-								provider: cfg.embedding.provider,
-								model: cfg.embedding.model,
-								files: stats.activeMemories,
-								chunks: stats.totalMemories,
-								dirty: false,
-								dbPath: resolvedDbPath,
-								sources: ["memory" as const],
-								vector: {
-									enabled: cfg.embedding.enabled,
-									available: cfg.embedding.enabled && db.isVectorAvailable,
-									dims: cfg.embedding.enabled ? vectorDims : null,
-									indexed: cfg.embedding.enabled ? vectorStats.indexed : 0,
-									pendingBackfill: cfg.embedding.enabled
-										? vectorStats.pendingBackfill
-										: 0,
-								},
-								custom: {
-									engine: "supermemory",
-									entities: stats.entities,
-									relationships: stats.relationships,
-									searchMode,
-								},
+								ok: false,
+								disabled: true,
+								error: "Embeddings are disabled by configuration.",
 							}
-						},
-						async sync() {
-							// No-op — supermemory captures memories via hooks/tools, not file sync
-						},
-						async probeEmbeddingAvailability() {
-							if (!cfg.embedding.enabled) {
-								return {
-									ok: false,
-									disabled: true,
-									error: "Embeddings are disabled by configuration.",
-								}
+						}
+						try {
+							await embeddings.embed("test")
+							return { ok: true }
+						} catch (err) {
+							return {
+								ok: false,
+								error: err instanceof Error ? err.message : String(err),
 							}
-							try {
-								await embeddings.embed("test")
-								return { ok: true }
-							} catch (err) {
-								return {
-									ok: false,
-									error: err instanceof Error ? err.message : String(err),
-								}
-							}
-						},
-						async probeVectorAvailability() {
-							return cfg.embedding.enabled && db.isVectorAvailable
-						},
-						async close() {
-							db.close()
-						},
-					}
-					return { manager }
-				} catch (err) {
-					return {
-						manager: null,
-						error: err instanceof Error ? err.message : String(err),
-					}
+						}
+					},
+					async probeVectorAvailability() {
+						return cfg.embedding.enabled && db.isVectorAvailable
+					},
+					async close() {
+						db.close()
+					},
 				}
-			},
-			resolveMemoryBackendConfig() {
-				return { backend: "builtin" as const }
-			},
-			async closeAllMemorySearchManagers() {
-				db.close()
-			},
-		})
+				return { manager }
+			} catch (err) {
+				return {
+					manager: null,
+					error: err instanceof Error ? err.message : String(err),
+				}
+			}
+		},
+		resolveMemoryBackendConfig() {
+			return { backend: "builtin" as const }
+		},
+		async closeAllMemorySearchManagers() {
+			db.close()
+		},
+	})
 
 	const toolCtx: ToolContext = {
 		db,
@@ -332,7 +324,15 @@ export default {
 	configSchema: supermemoryConfigSchema,
 
 	register(api: OpenClawPluginApi) {
-		const registrationMode = (api as RuntimeModeAwarePluginApi).registrationMode
+		const registrationMode = (
+			api as OpenClawPluginApi & {
+				registrationMode?:
+					| "full"
+					| "setup-only"
+					| "setup-runtime"
+					| "cli-metadata"
+			}
+		).registrationMode
 
 		if (registrationMode === "cli-metadata") {
 			registerCliMetadata(api)

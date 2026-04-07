@@ -81,87 +81,6 @@ type EmbeddingSignature = {
 	dimensions: number
 }
 
-type SchemaState = {
-	isEmpty: boolean
-	needsReset: boolean
-	needsWrite: boolean
-	needsFtsRebuild: boolean
-}
-
-const CURRENT_MEMORY_COLUMNS = [
-	"id",
-	"text",
-	"vector",
-	"memory_type",
-	"created_at",
-	"updated_at",
-	"expires_at",
-	"is_superseded",
-	"pinned",
-	"parent_memory_id",
-	"access_count",
-	"last_accessed_at",
-] as const
-
-const CURRENT_ENTITY_COLUMNS = [
-	"id",
-	"canonical_name",
-	"kind",
-	"first_seen",
-	"last_seen",
-	"merged_into_id",
-] as const
-
-const CURRENT_ENTITY_ALIAS_COLUMNS = [
-	"id",
-	"entity_id",
-	"surface_text",
-	"normalized_text",
-	"kind",
-	"first_seen",
-	"last_seen",
-] as const
-
-const CURRENT_ENTITY_MENTION_COLUMNS = ["memory_id", "alias_id"] as const
-
-const CURRENT_RELATIONSHIP_COLUMNS = [
-	"id",
-	"source_id",
-	"target_id",
-	"relation_type",
-	"created_at",
-] as const
-
-const PLUGIN_INDEX_NAMES = [
-	"idx_memories_type",
-	"idx_memories_superseded",
-	"idx_memories_expires",
-	"idx_entities_last_seen",
-	"idx_entities_merged_into",
-	"idx_entity_aliases_entity",
-	"idx_entity_aliases_normalized",
-	"idx_entity_mentions_alias",
-	"idx_relationships_source",
-	"idx_relationships_target",
-] as const
-
-const PLUGIN_OBJECT_NAMES = [
-	"memories_ai",
-	"memories_ad",
-	"memories_au",
-	"memories_vec",
-	"memories_fts",
-	"memories",
-	"entity_mentions",
-	"entity_aliases",
-	"entities",
-	"relationships",
-	"profile_cache",
-	"embedding_cache",
-	"embedding_signature",
-	...PLUGIN_INDEX_NAMES,
-] as const
-
 const EMBEDDING_SIGNATURE_SCOPE = "active"
 
 function embeddingSignaturesMatch(
@@ -229,9 +148,7 @@ export class MemoryDB {
 			allowExtension: cfg.embedding.enabled,
 		})
 		this.db.exec("PRAGMA busy_timeout = 5000")
-		if (this.getJournalMode() !== "wal") {
-			this.db.exec("PRAGMA journal_mode = WAL")
-		}
+		this.db.exec("PRAGMA journal_mode = WAL")
 		this.db.exec("PRAGMA foreign_keys = ON")
 		this.initSchema()
 		if (cfg.embedding.enabled) {
@@ -246,27 +163,8 @@ export class MemoryDB {
 		}
 	}
 
-	private getJournalMode(): string | null {
-		const row = this.db.prepare("PRAGMA journal_mode").get() as
-			| Record<string, unknown>
-			| undefined
-		const mode = row?.journal_mode
-		return typeof mode === "string" ? mode.toLowerCase() : null
-	}
-
 	private initSchema(): void {
-		const schemaState = this.inspectSchemaState()
-		if (schemaState.needsReset) {
-			this.resetPluginSchema()
-		}
-		if (!schemaState.needsWrite) return
-
 		this.createSchemaArtifacts()
-		if (!schemaState.needsFtsRebuild) return
-
-		try {
-			this.db.exec(`INSERT INTO memories_fts(memories_fts) VALUES ('rebuild')`)
-		} catch {}
 	}
 
 	private createSchemaArtifacts(): void {
@@ -345,13 +243,9 @@ export class MemoryDB {
         updated_at INTEGER NOT NULL
       );
 
-      CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(memory_type);
-      CREATE INDEX IF NOT EXISTS idx_memories_superseded ON memories(is_superseded);
       CREATE INDEX IF NOT EXISTS idx_memories_expires ON memories(expires_at);
-      CREATE INDEX IF NOT EXISTS idx_entities_last_seen ON entities(last_seen);
       CREATE INDEX IF NOT EXISTS idx_entities_merged_into ON entities(merged_into_id);
       CREATE INDEX IF NOT EXISTS idx_entity_aliases_entity ON entity_aliases(entity_id);
-      CREATE INDEX IF NOT EXISTS idx_entity_aliases_normalized ON entity_aliases(normalized_text);
       CREATE INDEX IF NOT EXISTS idx_entity_mentions_alias ON entity_mentions(alias_id);
       CREATE INDEX IF NOT EXISTS idx_relationships_source ON relationships(source_id);
       CREATE INDEX IF NOT EXISTS idx_relationships_target ON relationships(target_id);
@@ -387,170 +281,17 @@ export class MemoryDB {
     `)
 	}
 
-	private inspectSchemaState(): SchemaState {
-		const objects = this.db
-			.prepare(
-				`SELECT name, sql FROM sqlite_master
-         WHERE name IN (${PLUGIN_OBJECT_NAMES.map(() => "?").join(", ")})`,
-			)
-			.all(...PLUGIN_OBJECT_NAMES) as Array<{
-			name: string
-			sql: string | null
-		}>
-
-		if (objects.length === 0) {
-			return {
-				isEmpty: true,
-				needsReset: false,
-				needsWrite: true,
-				needsFtsRebuild: false,
-			}
-		}
-
-		const names = new Set(objects.map((obj) => obj.name))
-
-		for (const required of [
-			"memories",
-			"entities",
-			"entity_aliases",
-			"entity_mentions",
-			"relationships",
-		]) {
-			if (!names.has(required)) {
-				return {
-					isEmpty: false,
-					needsReset: true,
-					needsWrite: true,
-					needsFtsRebuild: false,
-				}
-			}
-		}
-
-		if (!this.tableColumnsMatch("memories", CURRENT_MEMORY_COLUMNS)) {
-			return {
-				isEmpty: false,
-				needsReset: true,
-				needsWrite: true,
-				needsFtsRebuild: false,
-			}
-		}
-		if (!this.tableColumnsMatch("entities", CURRENT_ENTITY_COLUMNS)) {
-			return {
-				isEmpty: false,
-				needsReset: true,
-				needsWrite: true,
-				needsFtsRebuild: false,
-			}
-		}
-		if (!this.tableColumnsMatch("entity_aliases", CURRENT_ENTITY_ALIAS_COLUMNS))
-			return {
-				isEmpty: false,
-				needsReset: true,
-				needsWrite: true,
-				needsFtsRebuild: false,
-			}
-		if (
-			!this.tableColumnsMatch("entity_mentions", CURRENT_ENTITY_MENTION_COLUMNS)
-		)
-			return {
-				isEmpty: false,
-				needsReset: true,
-				needsWrite: true,
-				needsFtsRebuild: false,
-			}
-		if (
-			!this.tableColumnsMatch("relationships", CURRENT_RELATIONSHIP_COLUMNS)
-		) {
-			return {
-				isEmpty: false,
-				needsReset: true,
-				needsWrite: true,
-				needsFtsRebuild: false,
-			}
-		}
-
-		const ftsSql =
-			objects.find((obj) => obj.name === "memories_fts")?.sql?.toLowerCase() ??
-			""
-		if (ftsSql.length > 0 && !ftsSql.includes("memory_type")) {
-			return {
-				isEmpty: false,
-				needsReset: true,
-				needsWrite: true,
-				needsFtsRebuild: false,
-			}
-		}
-
-		const needsWrite = PLUGIN_OBJECT_NAMES.some(
-			(name) => name !== "memories_vec" && !names.has(name),
-		)
-		const needsFtsRebuild =
-			!names.has("memories_fts") ||
-			!names.has("memories_ai") ||
-			!names.has("memories_ad") ||
-			!names.has("memories_au")
-
-		return {
-			isEmpty: false,
-			needsReset: false,
-			needsWrite,
-			needsFtsRebuild: needsWrite && needsFtsRebuild,
-		}
-	}
-
-	private tableColumnsMatch(
-		tableName: string,
-		expected: readonly string[],
-	): boolean {
-		const rows = this.db
-			.prepare(`PRAGMA table_info(${tableName})`)
-			.all() as Array<{ name: string }>
-		const actual = rows.map((row) => row.name)
-		return actual.join("|") === expected.join("|")
-	}
-
-	private resetPluginSchema(): void {
-		this.db.exec(`
-      DROP TRIGGER IF EXISTS memories_ai;
-      DROP TRIGGER IF EXISTS memories_ad;
-      DROP TRIGGER IF EXISTS memories_au;
-      DROP TABLE IF EXISTS memories_vec;
-      DROP TABLE IF EXISTS memories_fts;
-      DROP TABLE IF EXISTS relationships;
-      DROP TABLE IF EXISTS entity_mentions;
-      DROP TABLE IF EXISTS entity_aliases;
-      DROP TABLE IF EXISTS entities;
-      DROP TABLE IF EXISTS embedding_signature;
-      DROP TABLE IF EXISTS embedding_cache;
-      DROP TABLE IF EXISTS profile_cache;
-      DROP TABLE IF EXISTS memories;
-    `)
-	}
-
 	// Provider, model, and dimension changes invalidate every stored vector, but
 	// the memories and graph edges are still valid and can be re-embedded safely.
 	private reconcileEmbeddingState(expected: EmbeddingSignature): void {
 		const storedSignature = this.getEmbeddingSignature()
-		const storedMemoryVectorDims = this.getStoredMemoryVectorDimensions()
-		const vectorTableDims = this.getStoredVectorTableDimensions()
-		const signatureMissing = storedSignature === null
-
-		const signatureChanged =
-			!signatureMissing && !embeddingSignaturesMatch(storedSignature, expected)
-		const storedVectorDimsChanged =
-			storedMemoryVectorDims !== null &&
-			storedMemoryVectorDims !== expected.dimensions
-		const vectorTableDimsChanged =
-			vectorTableDims !== null && vectorTableDims !== expected.dimensions
-
-		if (signatureChanged || storedVectorDimsChanged || vectorTableDimsChanged) {
-			this.clearVectorState()
+		if (!storedSignature) {
 			this.setEmbeddingSignature(expected)
 			return
 		}
-		if (signatureMissing) {
-			this.setEmbeddingSignature(expected)
-		}
+		if (embeddingSignaturesMatch(storedSignature, expected)) return
+		this.clearVectorState()
+		this.setEmbeddingSignature(expected)
 	}
 
 	private getEmbeddingSignature(): EmbeddingSignature | null {
@@ -596,32 +337,6 @@ export class MemoryDB {
 			)
 	}
 
-	private getStoredMemoryVectorDimensions(): number | null {
-		const row = this.db
-			.prepare(
-				"SELECT length(vector) as bytes FROM memories WHERE vector IS NOT NULL LIMIT 1",
-			)
-			.get() as { bytes: number } | undefined
-
-		if (!row || typeof row.bytes !== "number") return null
-		if (row.bytes % Float64Array.BYTES_PER_ELEMENT !== 0) return 0
-		return row.bytes / Float64Array.BYTES_PER_ELEMENT
-	}
-
-	private getStoredVectorTableDimensions(): number | null {
-		const row = this.db
-			.prepare(
-				`SELECT sql FROM sqlite_master
-         WHERE name = 'memories_vec'`,
-			)
-			.get() as { sql: string | null } | undefined
-
-		const sql = row?.sql
-		if (!sql) return null
-		const match = sql.match(/vector\s+float\[(\d+)\]/i)
-		return match ? Number(match[1]) : null
-	}
-
 	private clearVectorState(): void {
 		this.db.exec("UPDATE memories SET vector = NULL WHERE vector IS NOT NULL")
 		this.db.exec("DELETE FROM embedding_cache")
@@ -643,27 +358,22 @@ export class MemoryDB {
 
 	private tryLoadVec(): void {
 		try {
+			// Resolve sqlite-vec from the host OpenClaw runtime only.
+			const hostEntry =
+				process.argv[1] && fs.existsSync(process.argv[1])
+					? fs.realpathSync(process.argv[1])
+					: import.meta.url
+			const hostRequire = createRequire(hostEntry)
+			const sqliteVec = hostRequire("sqlite-vec") as {
+				load: (db: DatabaseSync) => void
+			}
+			this.db.enableLoadExtension(true)
 			try {
-				let sqliteVec: { load: (db: DatabaseSync) => void }
-				try {
-					sqliteVec = esmRequire("sqlite-vec")
-				} catch {
-					// If not in plugin's node_modules, resolve from the host OpenClaw installation
-					// process.argv[1] points to the openclaw CLI executable entry point.
-					const hostRequire = createRequire(process.argv[1] || import.meta.url)
-					sqliteVec = hostRequire("sqlite-vec")
-				}
-				this.db.enableLoadExtension(true)
 				sqliteVec.load(this.db)
+			} finally {
 				this.db.enableLoadExtension(false)
-			} catch {
-				// Ignore load error; fall back to trying to create the table
-				// in case vec0 is already available (e.g. statically linked)
 			}
-
-			if (this.getStoredVectorTableDimensions() === null) {
-				this.createVectorTable()
-			}
+			this.createVectorTable()
 			this.vecAvailable = true
 		} catch {
 			this.vecAvailable = false

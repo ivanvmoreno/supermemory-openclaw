@@ -92,49 +92,6 @@ export function vectorDimsForModel(model: string, explicit?: number): number {
 	)
 }
 
-const ALLOWED_TOP_LEVEL_KEYS = new Set([
-	"embedding",
-	"autoCapture",
-	"autoRecall",
-	"captureMode",
-	"profileFrequency",
-	"maxLongTermItems",
-	"maxRecentItems",
-	"recentWindowDays",
-	"profileScanLimit",
-	"promptMemoryMaxChars",
-	"forgetExpiredIntervalMinutes",
-	"temporalDecayDays",
-	"maxRecallResults",
-	"vectorWeight",
-	"textWeight",
-	"graphWeight",
-	"dbPath",
-	"captureMaxChars",
-	"debug",
-	"minScore",
-	"vectorMinScoreFactor",
-	"graphSeedLimit",
-	"graphHopDepth",
-	"mmrLambda",
-	"autoRecallMaxMemories",
-	"autoRecallMinScore",
-	"nearDuplicateThreshold",
-	"lexicalDuplicateThreshold",
-	"updateVectorMinScore",
-	"maxRelatedEdges",
-	"extractorMaxItems",
-])
-
-function assertAllowedKeys(cfg: Record<string, unknown>): void {
-	const unknown = Object.keys(cfg).filter((k) => !ALLOWED_TOP_LEVEL_KEYS.has(k))
-	if (unknown.length > 0) {
-		throw new Error(
-			`openclaw-memory-supermemory config has unknown keys: ${unknown.join(", ")}`,
-		)
-	}
-}
-
 function resolveEnvVars(value: string): string {
 	return value.replace(/\$\{([^}]+)\}/g, (_, envVar: string) => {
 		const envValue = process.env[envVar]
@@ -166,10 +123,6 @@ export function parseSupermemoryConfig(value: unknown): SupermemoryConfig {
 	const cfg = (
 		value && typeof value === "object" && !Array.isArray(value) ? value : {}
 	) as Record<string, unknown>
-
-	if (Object.keys(cfg).length > 0) {
-		assertAllowedKeys(cfg)
-	}
 
 	const embeddingRaw = (cfg.embedding ?? {}) as Record<string, unknown>
 
@@ -319,11 +272,11 @@ export function parseSupermemoryConfig(value: unknown): SupermemoryConfig {
 export const supermemoryConfigSchema = {
 	jsonSchema: {
 		type: "object",
-		additionalProperties: false,
+		additionalProperties: true,
 		properties: {
 			embedding: {
 				type: "object",
-				additionalProperties: false,
+				additionalProperties: true,
 				properties: {
 					enabled: { type: "boolean" },
 					provider: { type: "string" },
