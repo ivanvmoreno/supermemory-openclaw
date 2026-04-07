@@ -114,9 +114,44 @@ function float64ToBlob(arr: Float64Array): Buffer {
 	return Buffer.from(arr.buffer, arr.byteOffset, arr.byteLength)
 }
 
+function float32ToBlob(arr: Float32Array): Buffer {
+	return Buffer.from(arr.buffer, arr.byteOffset, arr.byteLength)
+}
+
 function blobToFloat64(buf: Buffer | Uint8Array): Float64Array {
 	const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
 	return new Float64Array(ab)
+}
+
+function toSqliteVecBlob(
+	vector: ArrayLike<number>,
+	expectedDims: number,
+): Buffer {
+	if (vector.length !== expectedDims) {
+		throw new Error(
+			`Invalid vector dimensions: expected ${expectedDims}, received ${vector.length}`,
+		)
+	}
+
+	const normalized = new Float32Array(expectedDims)
+	for (let index = 0; index < expectedDims; index++) {
+		const value = vector[index]
+		if (!Number.isFinite(value)) {
+			throw new Error(
+				`Invalid vector value at index ${index}: ${String(value)}`,
+			)
+		}
+		normalized[index] = value
+	}
+
+	const expectedBytes = expectedDims * Float32Array.BYTES_PER_ELEMENT
+	if (normalized.byteLength !== expectedBytes) {
+		throw new Error(
+			`Invalid sqlite-vec payload size: expected ${expectedBytes} bytes, received ${normalized.byteLength}`,
+		)
+	}
+
+	return float32ToBlob(normalized)
 }
 
 const SQLITE_DB_RESET_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const
@@ -387,10 +422,12 @@ export class MemoryDB {
 	private upsertVectorIndex(id: string, vector: Float64Array): void {
 		if (!this.vecAvailable) return
 
+		const vectorBlob = toSqliteVecBlob(vector, this.vectorDims)
+
 		this.db.prepare("DELETE FROM memories_vec WHERE id = ?").run(id)
 		this.db
 			.prepare("INSERT INTO memories_vec (id, vector) VALUES (?, ?)")
-			.run(id, float64ToBlob(vector))
+			.run(id, vectorBlob)
 	}
 
 	storeMemory(params: {
@@ -696,7 +733,7 @@ export class MemoryDB {
 	): Array<{ id: string; score: number }> {
 		if (!this.vecAvailable) return []
 
-		const vectorBlob = float64ToBlob(queryVector)
+		const vectorBlob = toSqliteVecBlob(queryVector, this.vectorDims)
 		const rows = this.db
 			.prepare(
 				"SELECT id, distance FROM memories_vec WHERE vector MATCH ? ORDER BY distance LIMIT ?",

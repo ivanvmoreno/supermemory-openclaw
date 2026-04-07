@@ -8,7 +8,11 @@ import {
 import { MemoryDB } from "./src/db.ts"
 import { createEmbeddingProvider } from "./src/embeddings.ts"
 import { ForgettingService } from "./src/forgetting.ts"
-import { createAutoCaptureHook, createAutoRecallHook } from "./src/hooks.ts"
+import {
+	createAutoCaptureCommitHook,
+	createAutoCapturePrepareHook,
+	createAutoRecallHook,
+} from "./src/hooks.ts"
 import { createPluginLogger } from "./src/logger.ts"
 import { resolveSearchMode } from "./src/search.ts"
 import {
@@ -48,6 +52,10 @@ function registerFull(api: OpenClawPluginApi): void {
 		(api.runtime as { subagent?: unknown } | undefined)?.subagent ?? null
 
 	const state = { interactionCount: 0 }
+	const autoCaptureState = new Map<
+		string,
+		{ turnText: string; referenceTimeMs: number }
+	>()
 	const log = createPluginLogger(api.logger, "memory-supermemory", cfg.debug)
 
 	log.info(
@@ -278,11 +286,23 @@ function registerFull(api: OpenClawPluginApi): void {
 				"subagent runtime not available — auto-capture (LLM semantic extraction) is disabled. " +
 					"The memory_store tool will fall back to direct storage when semantic extraction is unavailable.",
 			)
+		} else {
+			api.on(
+				"before_prompt_build",
+				createAutoCapturePrepareHook(cfg, log, autoCaptureState),
+			)
+			api.on(
+				"llm_output",
+				createAutoCaptureCommitHook(
+					db,
+					embeddings,
+					cfg,
+					log,
+					autoCaptureState,
+					subagent as any,
+				),
+			)
 		}
-		api.on(
-			"agent_end",
-			createAutoCaptureHook(db, embeddings, cfg, log, subagent as any),
-		)
 	}
 
 	api.registerCli(({ program }: { program: unknown }) => {

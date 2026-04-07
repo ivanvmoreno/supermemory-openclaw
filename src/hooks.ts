@@ -18,6 +18,20 @@ import type { SemanticSubagentRuntime } from "./semantic-runtime.ts"
 const SKIPPED_PROVIDERS = new Set(["exec-event", "cron-event", "heartbeat"])
 const AUTO_CAPTURE_MIN_TEXT_BLOCK_CHARS = 10
 
+type AutoCapturePendingTurn = {
+	turnText: string
+	referenceTimeMs: number
+}
+
+type AutoCaptureState = Map<string, AutoCapturePendingTurn>
+
+type AutoCaptureHookContext = {
+	messageProvider?: unknown
+	runId?: unknown
+	sessionKey?: unknown
+	sessionId?: unknown
+}
+
 function getLastTurn(messages: unknown[]): unknown[] {
 	let lastUserIdx = -1
 	for (let i = messages.length - 1; i >= 0; i--) {
@@ -58,6 +72,82 @@ function extractTextBlocks(content: unknown): string[] {
 	}
 
 	return texts
+}
+
+function resolveProvider(ctx?: AutoCaptureHookContext): string | undefined {
+	return typeof ctx?.messageProvider === "string"
+		? ctx.messageProvider
+		: undefined
+}
+
+function resolveAutoCaptureKey(ctx?: AutoCaptureHookContext): string | null {
+	for (const candidate of [ctx?.runId, ctx?.sessionKey, ctx?.sessionId]) {
+		if (typeof candidate === "string" && candidate.length > 0) {
+			return candidate
+		}
+	}
+	return null
+}
+
+function sanitizeCaptureTexts(texts: string[]): string[] {
+	return texts
+		.map((text) => stripInjectedMemoryContext(text))
+		.filter((text) => text.length >= AUTO_CAPTURE_MIN_TEXT_BLOCK_CHARS)
+}
+
+function formatCaptureRoleBlock(
+	role: "user" | "assistant",
+	texts: string[],
+): string | null {
+	const sanitized = sanitizeCaptureTexts(texts)
+	if (sanitized.length === 0) return null
+	return `[role: ${role}]\n${sanitized.join("\n")}\n[${role}:end]`
+}
+
+function buildCaptureTurnParts(messages: unknown[]): string[] {
+	const lastTurn = getLastTurn(messages)
+	const turnParts: string[] = []
+
+	for (const msg of lastTurn) {
+		if (!msg || typeof msg !== "object") continue
+		const msgObj = msg as Record<string, unknown>
+		const role = msgObj.role
+		if (role !== "user" && role !== "assistant") continue
+
+		const block = formatCaptureRoleBlock(
+			role,
+			extractTextBlocks(msgObj.content),
+		)
+		if (block) {
+			turnParts.push(block)
+		}
+	}
+
+	return turnParts
+}
+
+function extractAssistantTextsFromOutput(event: {
+	assistantTexts?: unknown
+	lastAssistant?: unknown
+}): string[] {
+	if (Array.isArray(event.assistantTexts)) {
+		const texts = event.assistantTexts.filter(
+			(text): text is string => typeof text === "string",
+		)
+		if (texts.length > 0) return texts
+	}
+
+	const lastAssistant = event.lastAssistant
+	if (typeof lastAssistant === "string") {
+		return [lastAssistant]
+	}
+	if (lastAssistant && typeof lastAssistant === "object") {
+		return extractTextBlocks(
+			(lastAssistant as Record<string, unknown>).content ?? lastAssistant,
+		)
+	}
+
+	return []
 }
 
 export function createAutoRecallHook(
@@ -162,69 +252,97 @@ export function createAutoRecallHook(
 	}
 }
 
-export function createAutoCaptureHook(
-	db: MemoryDB,
-	embeddings: EmbeddingProvider,
+export function createAutoCapturePrepareHook(
 	cfg: SupermemoryConfig,
 	log: PluginLogger,
-	subagent?: SemanticSubagentRuntime | null,
+	state: AutoCaptureState,
 ) {
 	return async (
-		event: { success?: boolean; messages?: unknown[] },
-		ctx?: { messageProvider?: unknown },
+		event: { messages?: unknown[] },
+		ctx?: AutoCaptureHookContext,
 	) => {
 		if (!cfg.autoCapture || cfg.captureMode === "off") return
-		if (!subagent) return
-		if (!event.success || !event.messages || event.messages.length === 0) return
 
-		const provider =
-			typeof ctx?.messageProvider === "string" ? ctx.messageProvider : undefined
+		const key = resolveAutoCaptureKey(ctx)
+		if (!key) return
+
+		const provider = resolveProvider(ctx)
 		if (provider && SKIPPED_PROVIDERS.has(provider)) {
+			state.delete(key)
 			log.debug(`auto-capture skipped (provider=${provider})`)
 			return
 		}
 
+		const messages = event.messages
+		if (!messages || messages.length === 0) {
+			state.delete(key)
+			return
+		}
+
+		const turnParts = buildCaptureTurnParts(messages)
+		if (turnParts.length === 0) {
+			state.delete(key)
+			return
+		}
+
+		state.set(key, {
+			turnText: turnParts.join("\n\n").slice(0, cfg.captureMaxChars),
+			referenceTimeMs: Date.now(),
+		})
+	}
+}
+
+export function createAutoCaptureCommitHook(
+	db: MemoryDB,
+	embeddings: EmbeddingProvider,
+	cfg: SupermemoryConfig,
+	log: PluginLogger,
+	state: AutoCaptureState,
+	subagent?: SemanticSubagentRuntime | null,
+) {
+	return async (
+		event: { assistantTexts?: unknown; lastAssistant?: unknown },
+		ctx?: AutoCaptureHookContext,
+	) => {
+		if (!cfg.autoCapture || cfg.captureMode === "off") return
+		if (!subagent) return
+
+		const key = resolveAutoCaptureKey(ctx)
+		if (!key) return
+
+		const provider = resolveProvider(ctx)
+		if (provider && SKIPPED_PROVIDERS.has(provider)) {
+			state.delete(key)
+			log.debug(`auto-capture skipped (provider=${provider})`)
+			return
+		}
+
+		const pendingTurn = state.get(key)
+		state.delete(key)
+		if (!pendingTurn) return
+
 		try {
-			const lastTurn = getLastTurn(event.messages)
-
-			const turnParts: string[] = []
-			for (const msg of lastTurn) {
-				if (!msg || typeof msg !== "object") continue
-				const msgObj = msg as Record<string, unknown>
-				const role = msgObj.role
-				if (role !== "user" && role !== "assistant") continue
-
-				const parts = extractTextBlocks(msgObj.content)
-					.map((t) => stripInjectedMemoryContext(t))
-					.filter((t) => t.length >= AUTO_CAPTURE_MIN_TEXT_BLOCK_CHARS)
-
-				if (parts.length > 0) {
-					turnParts.push(`[role: ${role}]\n${parts.join("\n")}\n[${role}:end]`)
-				}
-			}
-
-			if (turnParts.length === 0) {
-				log.debug("auto-capture skipped (empty turn)")
+			const assistantTurn = formatCaptureRoleBlock(
+				"assistant",
+				extractAssistantTextsFromOutput(event),
+			)
+			if (!assistantTurn) {
 				return
 			}
 
-			const turnText = turnParts.join("\n\n").slice(0, cfg.captureMaxChars)
+			const turnText = [pendingTurn.turnText, assistantTurn]
+				.join("\n\n")
+				.slice(0, cfg.captureMaxChars)
 			log.debug(`auto-capture extracting from turn (${turnText.length} chars)…`)
 			const candidates = await extractMemoryCandidates(
 				turnText,
 				subagent,
 				log,
 				{
-					referenceTimeMs: Date.now(),
+					referenceTimeMs: pendingTurn.referenceTimeMs,
 					maxItems: cfg.extractorMaxItems,
 				},
 			)
-
-			if (candidates.length === 0) {
-				log.debug(
-					"auto-capture → LLM extraction returned no candidates for this turn",
-				)
-			}
 
 			let stored = 0
 			for (const candidate of candidates) {
