@@ -13,7 +13,10 @@ import {
 } from "./memory-text.ts"
 import { formatProfileForPrompt, getOrBuildProfile } from "./profile-builder.ts"
 import { hybridSearch } from "./search.ts"
-import type { SemanticSubagentRuntime } from "./semantic-runtime.ts"
+import {
+	isSemanticHelperSessionKey,
+	type SemanticSubagentRuntime,
+} from "./semantic-runtime.ts"
 
 const SKIPPED_PROVIDERS = new Set(["exec-event", "cron-event", "heartbeat"])
 const AUTO_CAPTURE_MIN_TEXT_BLOCK_CHARS = 10
@@ -74,6 +77,14 @@ function resolveProvider(ctx?: AutoCaptureHookContext): string | undefined {
 		: undefined
 }
 
+function shouldSkipSemanticHelperSession(ctx?: {
+	sessionKey?: unknown
+}): boolean {
+	return isSemanticHelperSessionKey(
+		typeof ctx?.sessionKey === "string" ? ctx.sessionKey : undefined,
+	)
+}
+
 function formatCaptureRoleBlock(
 	role: "user" | "assistant",
 	texts: string[],
@@ -116,10 +127,14 @@ export function createAutoRecallHook(
 ) {
 	return async (
 		event: { prompt: string; messages: unknown[] },
-		ctx?: { messageProvider?: unknown },
+		ctx?: AutoCaptureHookContext,
 	) => {
 		if (!cfg.autoRecall) {
 			log.debug("auto-recall skipped (disabled)")
+			return
+		}
+		if (shouldSkipSemanticHelperSession(ctx)) {
+			log.debug("auto-recall skipped (semantic helper session)")
 			return
 		}
 		const provider = resolveProvider(ctx)
@@ -222,6 +237,10 @@ export function createAutoCaptureHook(
 		if (!cfg.autoCapture) return
 		if (!subagent) return
 		if (!event.success || !event.messages || event.messages.length === 0) return
+		if (shouldSkipSemanticHelperSession(ctx)) {
+			log.debug("auto-capture skipped (semantic helper session)")
+			return
+		}
 
 		const provider = resolveProvider(ctx)
 		if (provider && SKIPPED_PROVIDERS.has(provider)) {

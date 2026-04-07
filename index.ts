@@ -12,6 +12,10 @@ import { createAutoCaptureHook, createAutoRecallHook } from "./src/hooks.ts"
 import { createPluginLogger } from "./src/logger.ts"
 import { resolveSearchMode } from "./src/search.ts"
 import {
+	isSemanticHelperSessionKey,
+	type SemanticSubagentRuntime,
+} from "./src/semantic-runtime.ts"
+import {
 	createMemoryForgetTool,
 	createMemoryProfileTool,
 	createMemorySearchTool,
@@ -34,6 +38,129 @@ function registerCliMetadata(api: OpenClawPluginApi): void {
 	api.registerCli(() => {}, SUPERMEMORY_CLI_REGISTRATION)
 }
 
+function buildSemanticRuntime(
+	api: OpenClawPluginApi,
+	cfg: ReturnType<typeof parseSupermemoryConfig>,
+	subagent: SemanticSubagentRuntime | null,
+): SemanticSubagentRuntime | null {
+	const runtime = api.runtime as
+		| {
+				agent?: {
+					resolveAgentWorkspaceDir?: (cfg: unknown) => string
+					session?: {
+						resolveSessionFilePath?: (
+							sessionId: string,
+							entry?: { sessionFile?: string },
+							opts?: { agentId?: string; sessionsDir?: string },
+						) => string
+					}
+					runEmbeddedPiAgent?: (params: {
+						sessionId: string
+						sessionKey?: string
+						sessionFile: string
+						workspaceDir: string
+						config?: unknown
+						prompt: string
+						timeoutMs: number
+						runId: string
+						extraSystemPrompt?: string
+						trigger?: string
+						disableTools?: boolean
+						disableMessageTool?: boolean
+						bootstrapContextMode?: "full" | "lightweight"
+						cleanupBundleMcpOnRunEnd?: boolean
+					}) => Promise<{
+						payloads?: Array<{
+							text?: string
+							isError?: boolean
+							isReasoning?: boolean
+						}>
+						meta: {
+							stopReason?: string
+							error?: { message: string }
+						}
+					}>
+				}
+		  }
+		| undefined
+	const embeddedAgent = runtime?.agent
+
+	if (!subagent && !embeddedAgent?.runEmbeddedPiAgent) return null
+
+	const runEmbeddedPiAgent = embeddedAgent?.runEmbeddedPiAgent
+	const resolveAgentWorkspaceDir = embeddedAgent?.resolveAgentWorkspaceDir
+	const resolveSessionFilePath = embeddedAgent?.session?.resolveSessionFilePath
+	const embeddedRun =
+		runEmbeddedPiAgent && resolveAgentWorkspaceDir && resolveSessionFilePath
+			? async (params: {
+					sessionKey: string
+					sessionId: string
+					runId: string
+					agentId?: string
+					message: string
+					systemPrompt: string
+					timeoutMs: number
+					idempotencyKey?: string
+				}) => {
+					const sessionFile = resolveSessionFilePath(
+						params.sessionId,
+						undefined,
+						params.agentId ? { agentId: params.agentId } : undefined,
+					)
+					const workspaceDir = resolveAgentWorkspaceDir(cfg)
+					const result = await runEmbeddedPiAgent({
+						sessionId: params.sessionId,
+						sessionKey: params.sessionKey,
+						sessionFile,
+						workspaceDir,
+						config: cfg,
+						prompt: params.message,
+						timeoutMs: params.timeoutMs,
+						runId: params.runId,
+						extraSystemPrompt: params.systemPrompt,
+						trigger: "memory",
+						disableTools: true,
+						disableMessageTool: true,
+						bootstrapContextMode: "lightweight",
+						cleanupBundleMcpOnRunEnd: true,
+					})
+
+					const text = (result.payloads ?? [])
+						.filter((payload) => typeof payload.text === "string")
+						.filter((payload) => !payload.isError && !payload.isReasoning)
+						.map((payload) => payload.text?.trim() ?? "")
+						.filter((payload) => payload.length > 0)
+						.join("\n\n")
+
+					return {
+						text: text || null,
+						stopReason: result.meta.stopReason,
+						error: result.meta.error?.message,
+					}
+				}
+			: undefined
+
+	return {
+		runJsonTask: embeddedRun,
+		run:
+			subagent?.run ??
+			(async () => {
+				throw new Error("semantic subagent runtime unavailable")
+			}),
+		waitForRun:
+			subagent?.waitForRun ??
+			(async () => {
+				throw new Error("semantic subagent runtime unavailable")
+			}),
+		getSessionMessages:
+			subagent?.getSessionMessages ??
+			(async () => {
+				return { messages: [] }
+			}),
+		deleteSession: subagent?.deleteSession ?? (async () => {}),
+	}
+}
+
 function registerFull(api: OpenClawPluginApi): void {
 	const cfg = parseSupermemoryConfig(api.pluginConfig)
 	const resolvedDbPath = api.resolvePath(cfg.dbPath)
@@ -46,6 +173,7 @@ function registerFull(api: OpenClawPluginApi): void {
 	const embeddings = createEmbeddingProvider(cfg.embedding, vectorDims, db)
 	const subagent =
 		(api.runtime as { subagent?: unknown } | undefined)?.subagent ?? null
+	const semanticRuntime = buildSemanticRuntime(api, cfg, subagent as any)
 
 	const state = { interactionCount: 0 }
 	const log = createPluginLogger(api.logger, "memory-supermemory", cfg.debug)
@@ -246,7 +374,7 @@ function registerFull(api: OpenClawPluginApi): void {
 		db,
 		embeddings,
 		cfg,
-		semanticRuntime: subagent as any,
+		semanticRuntime: semanticRuntime as any,
 		log,
 		get interactionCount() {
 			return state.interactionCount
@@ -256,19 +384,38 @@ function registerFull(api: OpenClawPluginApi): void {
 		},
 	}
 
-	api.registerTool(createMemorySearchTool(toolCtx), { name: "memory_search" })
+	api.registerTool(
+		(runtimeToolCtx?: { sessionKey?: string }) =>
+			isSemanticHelperSessionKey(runtimeToolCtx?.sessionKey)
+				? null
+				: createMemorySearchTool(toolCtx),
+		{ name: "memory_search" },
+	)
 	api.registerTool(
 		(runtimeToolCtx: {
 			agentId?: string
 			sessionKey?: string
 			sessionId?: string
-		}) => createMemoryStoreTool(toolCtx, runtimeToolCtx),
+		}) =>
+			isSemanticHelperSessionKey(runtimeToolCtx?.sessionKey)
+				? null
+				: createMemoryStoreTool(toolCtx, runtimeToolCtx),
 		{ name: "memory_store" },
 	)
-	api.registerTool(createMemoryForgetTool(toolCtx), { name: "memory_forget" })
-	api.registerTool(createMemoryProfileTool(toolCtx), {
-		name: "memory_profile",
-	})
+	api.registerTool(
+		(runtimeToolCtx?: { sessionKey?: string }) =>
+			isSemanticHelperSessionKey(runtimeToolCtx?.sessionKey)
+				? null
+				: createMemoryForgetTool(toolCtx),
+		{ name: "memory_forget" },
+	)
+	api.registerTool(
+		(runtimeToolCtx?: { sessionKey?: string }) =>
+			isSemanticHelperSessionKey(runtimeToolCtx?.sessionKey)
+				? null
+				: createMemoryProfileTool(toolCtx),
+		{ name: "memory_profile" },
+	)
 
 	registerSlashCommands(api, db, embeddings, cfg, log)
 
@@ -280,7 +427,7 @@ function registerFull(api: OpenClawPluginApi): void {
 	}
 
 	if (cfg.autoCapture) {
-		if (!subagent) {
+		if (!semanticRuntime) {
 			log.warn(
 				"subagent runtime not available — auto-capture (LLM semantic extraction) is disabled. " +
 					"The memory_store tool will fall back to direct storage when semantic extraction is unavailable.",
@@ -288,7 +435,7 @@ function registerFull(api: OpenClawPluginApi): void {
 		} else {
 			api.on(
 				"agent_end",
-				createAutoCaptureHook(db, embeddings, cfg, log, subagent as any),
+				createAutoCaptureHook(db, embeddings, cfg, log, semanticRuntime as any),
 			)
 		}
 	}
@@ -302,7 +449,7 @@ function registerFull(api: OpenClawPluginApi): void {
 
 	const forgettingService = new ForgettingService(db, cfg, log, {
 		embeddings,
-		semanticRuntime: subagent as any,
+		semanticRuntime: semanticRuntime as any,
 	})
 
 	api.registerService({

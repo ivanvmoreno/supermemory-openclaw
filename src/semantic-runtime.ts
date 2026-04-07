@@ -1,6 +1,20 @@
 import { createHash, randomUUID } from "node:crypto"
 
 export type SemanticSubagentRuntime = {
+	runJsonTask?: (params: {
+		sessionKey: string
+		sessionId: string
+		runId: string
+		agentId?: string
+		message: string
+		systemPrompt: string
+		timeoutMs: number
+		idempotencyKey?: string
+	}) => Promise<{
+		text: string | null
+		stopReason?: string
+		error?: string
+	}>
 	run: (params: {
 		sessionKey: string
 		message: string
@@ -38,6 +52,7 @@ const DEFAULT_SESSION_MESSAGE_LIMIT = 8
 const DEFAULT_AGENT_ID = "main"
 const DEFAULT_TASK_SLUG = "task"
 const DEFAULT_SCOPE_HASH = "global"
+const SEMANTIC_SUBAGENT_SESSION_MARKER = ":subagent:supermemory:"
 
 function normalizeAgentId(agentId?: string): string {
 	const normalized = (agentId ?? "")
@@ -79,6 +94,15 @@ function buildSemanticSubagentSessionKey(params: {
 	return `agent:${agentId}:subagent:supermemory:${taskSlug}:${scopeHash}:run:${randomUUID()}`
 }
 
+export function isSemanticHelperSessionKey(
+	sessionKey: string | null | undefined,
+): boolean {
+	return (
+		typeof sessionKey === "string" &&
+		sessionKey.includes(SEMANTIC_SUBAGENT_SESSION_MARKER)
+	)
+}
+
 export async function runSubagentJsonTask(params: {
 	runtime: SemanticSubagentRuntime
 	taskPrefix: string
@@ -92,10 +116,40 @@ export async function runSubagentJsonTask(params: {
 		taskPrefix: params.taskPrefix,
 		semanticScope: params.semanticScope,
 	})
+	const sessionId = `supermemory-${randomUUID()}`
+	const runId = `supermemory-${normalizeSemanticTaskSlug(params.taskPrefix)}-${randomUUID()}`
 	const idempotencyKey = `supermemory-${normalizeSemanticTaskSlug(params.taskPrefix)}-${randomUUID()}`
 
+	if (params.runtime.runJsonTask) {
+		const result = await params.runtime.runJsonTask({
+			sessionKey,
+			sessionId,
+			runId,
+			agentId: params.semanticScope?.agentId,
+			message: params.message,
+			systemPrompt: params.systemPrompt,
+			timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+			idempotencyKey,
+		})
+
+		if (result.error) {
+			throw new Error(result.error)
+		}
+
+		if (!result.text?.trim()) {
+			if (result.stopReason && result.stopReason !== "completed") {
+				throw new Error(
+					`semantic json task ended with stopReason=${result.stopReason}`,
+				)
+			}
+			return null
+		}
+
+		return result.text
+	}
+
 	try {
-		const { runId } = await params.runtime.run({
+		const { runId: subagentRunId } = await params.runtime.run({
 			sessionKey,
 			message: params.message,
 			extraSystemPrompt: params.systemPrompt,
@@ -104,7 +158,7 @@ export async function runSubagentJsonTask(params: {
 		})
 
 		const result = await params.runtime.waitForRun({
-			runId,
+			runId: subagentRunId,
 			timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
 		})
 
