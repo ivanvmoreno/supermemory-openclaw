@@ -12,6 +12,7 @@ import {
 	type UpdateResolverCandidate,
 } from "./fact-extractor.ts"
 import { prepareMemoryTextForStorage } from "./memory-text.ts"
+import type { SemanticTaskScope } from "./semantic-runtime.ts"
 
 const MAX_MEMORY_TEXT_CHARS = 2000
 const DEDUP_FTS_CANDIDATE_LIMIT = 12
@@ -39,6 +40,7 @@ export async function processNewMemory(
 		updatedAt?: number
 		referenceTimeMs?: number
 		semanticRuntime?: SemanticRuntimeLike | null
+		semanticScope?: SemanticTaskScope | null
 		log?: SemanticLogLike
 		semanticMemory?: ExtractedMemoryCandidate | null
 		cfg?: SupermemoryConfig
@@ -157,6 +159,7 @@ export async function processNewMemory(
 		memory,
 		db,
 		options?.semanticRuntime ?? null,
+		options?.semanticScope ?? null,
 		log,
 		options?.cfg,
 	)
@@ -393,6 +396,7 @@ async function resolveUpdateRelationship(
 	memory: MemoryRow,
 	db: MemoryDB,
 	semanticRuntime: SemanticRuntimeLike | null,
+	semanticScope: SemanticTaskScope | null,
 	log?: SemanticLogLike,
 	cfg?: SupermemoryConfig,
 ): Promise<string | null> {
@@ -416,6 +420,7 @@ async function resolveUpdateRelationship(
 		candidates,
 		semanticRuntime,
 		effectiveLog,
+		{ semanticScope },
 	)
 
 	const updateDecision = decisions.find(

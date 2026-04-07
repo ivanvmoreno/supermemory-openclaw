@@ -13,7 +13,10 @@ import {
 } from "./memory-text.ts"
 import { formatProfileForPrompt, getOrBuildProfile } from "./profile-builder.ts"
 import { hybridSearch } from "./search.ts"
-import type { SemanticSubagentRuntime } from "./semantic-runtime.ts"
+import type {
+	SemanticSubagentRuntime,
+	SemanticTaskScope,
+} from "./semantic-runtime.ts"
 
 const SKIPPED_PROVIDERS = new Set(["exec-event", "cron-event", "heartbeat"])
 const AUTO_CAPTURE_MIN_TEXT_BLOCK_CHARS = 10
@@ -21,11 +24,13 @@ const AUTO_CAPTURE_MIN_TEXT_BLOCK_CHARS = 10
 type AutoCapturePendingTurn = {
 	turnText: string
 	referenceTimeMs: number
+	semanticScope: SemanticTaskScope
 }
 
 type AutoCaptureState = Map<string, AutoCapturePendingTurn>
 
 type AutoCaptureHookContext = {
+	agentId?: unknown
 	messageProvider?: unknown
 	runId?: unknown
 	sessionKey?: unknown
@@ -81,12 +86,39 @@ function resolveProvider(ctx?: AutoCaptureHookContext): string | undefined {
 }
 
 function resolveAutoCaptureKey(ctx?: AutoCaptureHookContext): string | null {
-	for (const candidate of [ctx?.runId, ctx?.sessionKey, ctx?.sessionId]) {
+	for (const candidate of [ctx?.runId, ctx?.sessionId, ctx?.sessionKey]) {
 		if (typeof candidate === "string" && candidate.length > 0) {
 			return candidate
 		}
 	}
 	return null
+}
+
+function resolveAutoCaptureScopeKey(
+	ctx?: AutoCaptureHookContext,
+): string | null {
+	for (const candidate of [ctx?.sessionKey, ctx?.sessionId, ctx?.runId]) {
+		if (typeof candidate === "string" && candidate.length > 0) {
+			return candidate
+		}
+	}
+	return null
+}
+
+function resolveAutoCaptureScope(
+	ctx?: AutoCaptureHookContext,
+): SemanticTaskScope {
+	return {
+		agentId:
+			typeof ctx?.agentId === "string" && ctx.agentId.length > 0
+				? ctx.agentId
+				: undefined,
+		parentSessionKey:
+			typeof ctx?.sessionKey === "string" && ctx.sessionKey.length > 0
+				? ctx.sessionKey
+				: undefined,
+		scopeKey: resolveAutoCaptureScopeKey(ctx) ?? undefined,
+	}
 }
 
 function sanitizeCaptureTexts(texts: string[]): string[] {
@@ -288,6 +320,7 @@ export function createAutoCapturePrepareHook(
 		state.set(key, {
 			turnText: turnParts.join("\n\n").slice(0, cfg.captureMaxChars),
 			referenceTimeMs: Date.now(),
+			semanticScope: resolveAutoCaptureScope(ctx),
 		})
 	}
 }
@@ -341,6 +374,7 @@ export function createAutoCaptureCommitHook(
 				{
 					referenceTimeMs: pendingTurn.referenceTimeMs,
 					maxItems: cfg.extractorMaxItems,
+					semanticScope: pendingTurn.semanticScope,
 				},
 			)
 
@@ -355,6 +389,7 @@ export function createAutoCaptureCommitHook(
 							embeddingEnabled: cfg.embedding.enabled,
 							semanticMemory: candidate,
 							semanticRuntime: subagent,
+							semanticScope: pendingTurn.semanticScope,
 							log,
 							cfg,
 						},

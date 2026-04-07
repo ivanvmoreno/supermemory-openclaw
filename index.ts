@@ -54,7 +54,15 @@ function registerFull(api: OpenClawPluginApi): void {
 	const state = { interactionCount: 0 }
 	const autoCaptureState = new Map<
 		string,
-		{ turnText: string; referenceTimeMs: number }
+		{
+			turnText: string
+			referenceTimeMs: number
+			semanticScope: {
+				agentId?: string
+				parentSessionKey?: string
+				scopeKey?: string
+			}
+		}
 	>()
 	const log = createPluginLogger(api.logger, "memory-supermemory", cfg.debug)
 
@@ -265,7 +273,14 @@ function registerFull(api: OpenClawPluginApi): void {
 	}
 
 	api.registerTool(createMemorySearchTool(toolCtx), { name: "memory_search" })
-	api.registerTool(createMemoryStoreTool(toolCtx), { name: "memory_store" })
+	api.registerTool(
+		(runtimeToolCtx: {
+			agentId?: string
+			sessionKey?: string
+			sessionId?: string
+		}) => createMemoryStoreTool(toolCtx, runtimeToolCtx),
+		{ name: "memory_store" },
+	)
 	api.registerTool(createMemoryForgetTool(toolCtx), { name: "memory_forget" })
 	api.registerTool(createMemoryProfileTool(toolCtx), {
 		name: "memory_profile",

@@ -21,6 +21,7 @@ const ENTITY_MERGE_ENTITY_LIMIT = 120
 const ENTITY_MERGE_PAIR_LIMIT = 24
 const VECTOR_BACKFILL_BATCH_SIZE = 20
 const VECTOR_BACKFILL_INTERVAL_MS = 1000
+const ENTITY_MERGE_SCOPE_KEY = "maintenance"
 
 export function runForgettingCycle(
 	db: MemoryDB,
@@ -75,6 +76,11 @@ export async function runEntityMergeCycle(
 		candidatePairs,
 		semanticRuntime,
 		log,
+		{
+			semanticScope: {
+				scopeKey: ENTITY_MERGE_SCOPE_KEY,
+			},
+		},
 	)
 	let mergedCount = 0
 

@@ -3,6 +3,7 @@ import {
 	runSubagentJsonTask,
 	type SemanticLogger,
 	type SemanticSubagentRuntime,
+	type SemanticTaskScope,
 } from "./semantic-runtime.ts"
 
 export type ExtractedEntityMention = {
@@ -59,7 +60,11 @@ export async function extractMemoryCandidates(
 	turnText: string,
 	subagent: SemanticSubagentRuntime,
 	log: SemanticLogger,
-	options?: { referenceTimeMs?: number; maxItems?: number },
+	options?: {
+		referenceTimeMs?: number
+		maxItems?: number
+		semanticScope?: SemanticTaskScope | null
+	},
 ): Promise<ExtractedMemoryCandidate[]> {
 	if (!turnText || turnText.trim().length < EXTRACTOR_TURN_MIN_CHARS) return []
 
@@ -98,6 +103,10 @@ Return only valid JSON. No markdown, no prose, no comments.`
 			taskPrefix: "__supermemory-extract",
 			message: turnText,
 			systemPrompt,
+			agentId: options?.semanticScope?.agentId,
+			parentSessionKey: options?.semanticScope?.parentSessionKey,
+			scopeKey: options?.semanticScope?.scopeKey,
+			log,
 		})
 
 		if (!raw?.trim()) return []
@@ -135,6 +144,7 @@ export async function resolveMemoryRelationships(
 	candidates: UpdateResolverCandidate[],
 	subagent: SemanticSubagentRuntime,
 	log: SemanticLogger,
+	options?: { semanticScope?: SemanticTaskScope | null },
 ): Promise<MemoryRelationshipDecision[]> {
 	if (candidates.length === 0) return []
 
@@ -171,6 +181,10 @@ Rules:
 			taskPrefix: "__supermemory-relate",
 			message: payload,
 			systemPrompt,
+			agentId: options?.semanticScope?.agentId,
+			parentSessionKey: options?.semanticScope?.parentSessionKey,
+			scopeKey: options?.semanticScope?.scopeKey,
+			log,
 		})
 
 		if (!raw?.trim()) return []
@@ -219,6 +233,7 @@ export async function resolveEntityEquivalences(
 	pairs: EntityMergeCandidate[],
 	subagent: SemanticSubagentRuntime,
 	log: SemanticLogger,
+	options?: { semanticScope?: SemanticTaskScope | null },
 ): Promise<EntityMergeDecision[]> {
 	if (pairs.length === 0) return []
 
@@ -243,6 +258,10 @@ Rules:
 			taskPrefix: "__supermemory-entity-merge",
 			message: payload,
 			systemPrompt,
+			agentId: options?.semanticScope?.agentId,
+			parentSessionKey: options?.semanticScope?.parentSessionKey,
+			scopeKey: options?.semanticScope?.scopeKey,
+			log,
 		})
 
 		if (!raw?.trim()) return []

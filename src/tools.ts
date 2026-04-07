@@ -11,11 +11,20 @@ import { processNewMemory } from "./graph-engine.ts"
 import type { PluginLogger } from "./logger.ts"
 import { getOrBuildProfile, type UserProfile } from "./profile-builder.ts"
 import { hybridSearch, resolveSearchMode } from "./search.ts"
-import type { SemanticSubagentRuntime } from "./semantic-runtime.ts"
+import type {
+	SemanticSubagentRuntime,
+	SemanticTaskScope,
+} from "./semantic-runtime.ts"
 
 type ToolResult = {
 	content: Array<{ type: string; text: string }>
 	details?: Record<string, unknown>
+}
+
+type MemoryStoreToolRuntimeContext = {
+	agentId?: string
+	sessionKey?: string
+	sessionId?: string
 }
 
 type ToolExecuteFn = (
@@ -43,6 +52,18 @@ export type ToolContext = {
 const FORGET_SEARCH_CANDIDATE_LIMIT = 5
 const FORGET_SEARCH_MIN_SCORE = 0.5
 const FORGET_AUTO_DELETE_MIN_SCORE = 0.8
+
+export function resolveMemoryStoreSemanticScope(
+	toolCtx: MemoryStoreToolRuntimeContext | undefined,
+	toolCallId: string,
+): SemanticTaskScope {
+	return {
+		agentId: toolCtx?.agentId,
+		parentSessionKey: toolCtx?.sessionKey,
+		scopeKey:
+			toolCallId || toolCtx?.sessionId || toolCtx?.sessionKey || undefined,
+	}
+}
 
 export function createMemorySearchTool(ctx: ToolContext): ToolDefinition {
 	const searchMode = resolveSearchMode(ctx.cfg, ctx.db)
@@ -118,7 +139,10 @@ export function createMemorySearchTool(ctx: ToolContext): ToolDefinition {
 	}
 }
 
-export function createMemoryStoreTool(ctx: ToolContext): ToolDefinition {
+export function createMemoryStoreTool(
+	ctx: ToolContext,
+	toolCtx?: MemoryStoreToolRuntimeContext,
+): ToolDefinition {
 	return {
 		name: "memory_store",
 		label: "Memory Store",
@@ -141,6 +165,10 @@ export function createMemoryStoreTool(ctx: ToolContext): ToolDefinition {
 			),
 		}),
 		async execute(_toolCallId, params) {
+			const semanticScope =
+				ctx.semanticRuntime !== null && ctx.semanticRuntime !== undefined
+					? resolveMemoryStoreSemanticScope(toolCtx, _toolCallId)
+					: null
 			const text = params.text as string
 			const memoryType = params.memoryType as MemoryType | undefined
 			const pinned = params.pinned as boolean | undefined
@@ -154,6 +182,7 @@ export function createMemoryStoreTool(ctx: ToolContext): ToolDefinition {
 					{
 						referenceTimeMs: Date.now(),
 						maxItems: ctx.cfg.extractorMaxItems,
+						semanticScope,
 					},
 				)
 
@@ -168,6 +197,7 @@ export function createMemoryStoreTool(ctx: ToolContext): ToolDefinition {
 							pinnedOverride: pinned,
 							semanticMemory: candidate,
 							semanticRuntime: ctx.semanticRuntime,
+							semanticScope,
 							log: ctx.log,
 							cfg: ctx.cfg,
 						},
@@ -179,16 +209,12 @@ export function createMemoryStoreTool(ctx: ToolContext): ToolDefinition {
 			}
 
 			if (storedMemories.length === 0) {
-				// Fallback: store the raw input text directly without LLM extraction.
-				// No semanticMemory is provided here, so entity mentions cannot be linked
-				// (there is no NER path available without a successful extraction pass).
-				// Update-relationship resolution still runs via vector candidates if a
-				// semanticRuntime is present.
 				const fallback = await processNewMemory(text, ctx.db, ctx.embeddings, {
 					embeddingEnabled: ctx.cfg.embedding.enabled,
 					memoryTypeOverride: memoryType,
 					pinnedOverride: pinned,
 					semanticRuntime: ctx.semanticRuntime ?? null,
+					semanticScope,
 					log: ctx.log,
 					cfg: ctx.cfg,
 				})

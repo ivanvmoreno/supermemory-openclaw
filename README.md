@@ -75,8 +75,6 @@ builds, wipe the memory database and let the plugin recreate it:
 openclaw supermemory wipe --confirm
 ```
 
-If you use a custom `dbPath`, delete that SQLite file instead.
-
 ## Embedding Providers
 
 Supported providers and auto-detected dimensions:
